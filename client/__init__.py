@@ -1,10 +1,10 @@
 """
-ClubAI Client
+Iris Client
 
-Python SDK and CLI for interacting with the ClubAI network.
+Python SDK and CLI for interacting with the Iris network.
 """
 
-from .sdk import ClubAIClient, ClubAIError
+from .sdk import IrisClient, IrisError
 
-__all__ = ["ClubAIClient", "ClubAIError"]
+__all__ = ["IrisClient", "IrisError"]
 __version__ = "0.1.0"

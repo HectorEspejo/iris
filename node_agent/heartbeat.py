@@ -1,5 +1,5 @@
 """
-ClubAI Node Heartbeat
+Iris Node Heartbeat
 
 Manages periodic heartbeat messages to the coordinator.
 """

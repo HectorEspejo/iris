@@ -1,5 +1,5 @@
 """
-ClubAI Task Difficulty Classifier
+Iris Task Difficulty Classifier
 
 Classifies tasks into difficulty levels based on prompt analysis.
 """

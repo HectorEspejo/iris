@@ -1,5 +1,5 @@
 """
-ClubAI Shared Module
+Iris Shared Module
 
 Common models, protocols, and utilities shared between coordinator, node agents, and clients.
 """

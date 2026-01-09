@@ -1,5 +1,5 @@
 """
-Integration tests for ClubAI.
+Integration tests for Iris.
 
 These tests verify the end-to-end flow of the system.
 """

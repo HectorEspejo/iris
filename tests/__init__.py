@@ -1,3 +1,3 @@
 """
-ClubAI Tests
+Iris Tests
 """

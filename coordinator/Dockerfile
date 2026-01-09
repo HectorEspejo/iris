@@ -22,7 +22,7 @@ RUN mkdir -p /app/data
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
-ENV DATABASE_URL=sqlite:///data/clubai.db
+ENV DATABASE_URL=sqlite:///data/iris.db
 
 # Expose port
 EXPOSE 8000

@@ -1,5 +1,5 @@
 """
-ClubAI Node Agent - Main Application
+Iris Node Agent - Main Application
 
 Agent that runs on each node to connect to the coordinator
 and execute inference tasks using LM Studio.
@@ -66,14 +66,16 @@ class NodeAgent:
     def __init__(
         self,
         node_id: str,
-        coordinator_url: str,
+        coordinator_url: str = "wss://168.119.10.189:8000/nodes/connect",
         lmstudio_url: str = "http://localhost:1234/v1",
-        key_path: str = "data/node.key"
+        key_path: str = "data/node.key",
+        enrollment_token: Optional[str] = None
     ):
         self.node_id = node_id
         self.coordinator_url = coordinator_url
         self.lmstudio_url = lmstudio_url
         self.key_path = key_path
+        self.enrollment_token = enrollment_token
 
         self._ws = None  # WebSocket connection
         self._lm_client: Optional[LMStudioClient] = None
@@ -226,6 +228,7 @@ class NodeAgent:
             NodeRegisterPayload(
                 node_id=self.node_id,
                 public_key=node_crypto.public_key,
+                enrollment_token=self.enrollment_token,  # Required for new nodes
                 lmstudio_port=int(self.lmstudio_url.split(":")[-1].split("/")[0]),
                 model_name=model_name,
                 max_context=8192,  # TODO: Get from LM Studio
@@ -437,7 +440,7 @@ async def main():
     node_id = os.environ.get("NODE_ID", f"node-{os.getpid()}")
     coordinator_url = os.environ.get(
         "COORDINATOR_URL",
-        "ws://localhost:8000/nodes/connect"
+        "wss://168.119.10.189:8000/nodes/connect"  # Default production coordinator
     )
     lmstudio_url = os.environ.get(
         "LMSTUDIO_URL",
@@ -447,12 +450,14 @@ async def main():
         "NODE_KEY_PATH",
         "data/node.key"
     )
+    enrollment_token = os.environ.get("ENROLLMENT_TOKEN")
 
     agent = NodeAgent(
         node_id=node_id,
         coordinator_url=coordinator_url,
         lmstudio_url=lmstudio_url,
-        key_path=key_path
+        key_path=key_path,
+        enrollment_token=enrollment_token
     )
 
     try:

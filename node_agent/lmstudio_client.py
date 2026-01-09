@@ -1,5 +1,5 @@
 """
-ClubAI LM Studio Client
+Iris LM Studio Client
 
 Wrapper for the LM Studio OpenAI-compatible API.
 """

@@ -1,5 +1,5 @@
 """
-ClubAI Model Information Parser
+Iris Model Information Parser
 
 Extracts model parameters and quantization from model names.
 """

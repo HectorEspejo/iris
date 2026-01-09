@@ -1,7 +1,7 @@
 """
-ClubAI Python SDK
+Iris Python SDK
 
-Client library for interacting with the ClubAI coordinator.
+Client library for interacting with the Iris coordinator.
 """
 
 import asyncio
@@ -20,17 +20,17 @@ from shared.models import (
 from shared.crypto_utils import KeyPair, encrypt_for_recipient, decrypt_from_sender
 
 
-class ClubAIError(Exception):
-    """Base exception for ClubAI client errors."""
+class IrisError(Exception):
+    """Base exception for Iris client errors."""
     pass
 
 
-class AuthenticationError(ClubAIError):
+class AuthenticationError(IrisError):
     """Raised when authentication fails."""
     pass
 
 
-class APIError(ClubAIError):
+class APIError(IrisError):
     """Raised when an API request fails."""
     def __init__(self, message: str, status_code: int = None):
         super().__init__(message)
@@ -42,7 +42,7 @@ class ClientConfig:
     """Client configuration."""
     base_url: str = "http://localhost:8000"
     timeout: float = 120.0
-    config_dir: Path = Path.home() / ".clubai"
+    config_dir: Path = Path.home() / ".iris"
 
     @property
     def token_file(self) -> Path:
@@ -53,12 +53,12 @@ class ClientConfig:
         return self.config_dir / "client.key"
 
 
-class ClubAIClient:
+class IrisClient:
     """
-    Async client for the ClubAI distributed inference network.
+    Async client for the Iris distributed inference network.
 
     Usage:
-        async with ClubAIClient() as client:
+        async with IrisClient() as client:
             await client.login("user@example.com", "password")
             response = await client.ask("What is the meaning of life?")
             print(response)
@@ -75,7 +75,7 @@ class ClubAIClient:
         self._keypair: Optional[KeyPair] = None
         self._coordinator_public_key: Optional[str] = None
 
-    async def __aenter__(self) -> "ClubAIClient":
+    async def __aenter__(self) -> "IrisClient":
         """Async context manager entry."""
         await self.connect()
         return self
@@ -334,15 +334,15 @@ class ClubAIClient:
 
 
 # Synchronous wrapper for simple usage
-class ClubAIClientSync:
+class IrisClientSync:
     """
-    Synchronous wrapper for ClubAIClient.
+    Synchronous wrapper for IrisClient.
 
     For use in non-async contexts.
     """
 
     def __init__(self, base_url: str = "http://localhost:8000"):
-        self._client = ClubAIClient(base_url=base_url)
+        self._client = IrisClient(base_url=base_url)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def _get_loop(self) -> asyncio.AbstractEventLoop:

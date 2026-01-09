@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ClubAI is a distributed AI inference network where users pay a monthly fee for access, contribute compute nodes running LM Studio, and earn rewards based on reputation. The system uses a central coordinator architecture with WebSocket-connected node agents.
+Iris is a distributed AI inference network where users pay a monthly fee for access, contribute compute nodes running LM Studio, and earn rewards based on reputation. The system uses a central coordinator architecture with WebSocket-connected node agents.
 
 ## Development Commands
 
@@ -71,7 +71,7 @@ node_agent/          # Distributed node agents
 
 client/              # User interfaces
 ├── cli.py           # Typer CLI with Rich output
-└── sdk.py           # AsyncClubAIClient for programmatic access
+└── sdk.py           # AsyncIrisClient for programmatic access
 
 shared/              # Shared between all components
 ├── models.py        # Pydantic models (User, Node, Task, Subtask)
@@ -103,7 +103,7 @@ All payloads are encrypted end-to-end using:
 ## Key Environment Variables
 
 **Coordinator:**
-- `DATABASE_URL` - SQLite path (default: `sqlite:///data/clubai.db`)
+- `DATABASE_URL` - SQLite path (default: `sqlite:///data/iris.db`)
 - `JWT_SECRET` - JWT signing secret
 - `COORDINATOR_PRIVATE_KEY_PATH` - Key file path
 

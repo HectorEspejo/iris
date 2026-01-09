@@ -1,5 +1,5 @@
 """
-ClubAI GPU Detection
+Iris GPU Detection
 
 Detects GPU information for node capability reporting.
 Supports NVIDIA (via pynvml), Apple Silicon, and fallback defaults.

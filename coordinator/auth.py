@@ -1,5 +1,5 @@
 """
-ClubAI Authentication
+Iris Authentication
 
 JWT-based authentication for users.
 """
@@ -19,7 +19,7 @@ from .database import db
 logger = structlog.get_logger()
 
 # Configuration
-SECRET_KEY = "clubai-secret-key-change-in-production"  # TODO: Load from env
+SECRET_KEY = "iris-secret-key-change-in-production"  # TODO: Load from env
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 

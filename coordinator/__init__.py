@@ -1,5 +1,5 @@
 """
-ClubAI Coordinator
+Iris Coordinator
 
 Central server that manages node registration, task orchestration,
 and user authentication for the distributed inference network.

@@ -1,5 +1,5 @@
 """
-ClubAI Economics Module
+Iris Economics Module
 
 Manages the economic pool and distribution of earnings to nodes.
 """

@@ -1,5 +1,5 @@
 """
-ClubAI Cryptographic Utilities
+Iris Cryptographic Utilities
 
 E2E encryption using X25519 for key exchange and AES-256-GCM for data encryption.
 """

@@ -1,5 +1,5 @@
 """
-ClubAI Web Dashboard
+Iris Web Dashboard
 
 Simple HTML dashboard for monitoring the network.
 """

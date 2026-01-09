@@ -1,5 +1,5 @@
 """
-ClubAI WebSocket Protocol
+Iris WebSocket Protocol
 
 Message definitions for coordinator <-> node communication.
 """
@@ -37,6 +37,8 @@ class NodeRegisterPayload(BaseModel):
     """Payload for NODE_REGISTER message."""
     node_id: str
     public_key: str
+    # Enrollment token - required for first registration, optional for reconnection
+    enrollment_token: Optional[str] = None
     lmstudio_port: int = 1234
     model_name: str
     max_context: int = 8192

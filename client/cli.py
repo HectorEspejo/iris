@@ -1,7 +1,7 @@
 """
-ClubAI Command Line Interface
+Iris Command Line Interface
 
-CLI for interacting with the ClubAI distributed inference network.
+CLI for interacting with the Iris distributed inference network.
 """
 
 import asyncio
@@ -17,12 +17,12 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 
 from shared.models import TaskMode, TaskStatus, TaskDifficulty
-from .sdk import ClubAIClient, ClubAIError, AuthenticationError, APIError
+from .sdk import IrisClient, IrisError, AuthenticationError, APIError
 
 # Initialize Typer app
 app = typer.Typer(
-    name="clubai",
-    help="ClubAI - Distributed AI Inference Network CLI",
+    name="iris",
+    help="Iris - Distributed AI Inference Network CLI",
     add_completion=False
 )
 
@@ -33,9 +33,9 @@ console = Console()
 DEFAULT_URL = "http://localhost:8000"
 
 
-def get_client(url: str = DEFAULT_URL) -> ClubAIClient:
+def get_client(url: str = DEFAULT_URL) -> IrisClient:
     """Create a client instance."""
-    return ClubAIClient(base_url=url)
+    return IrisClient(base_url=url)
 
 
 def run_async(coro):
@@ -61,7 +61,7 @@ def register(
                 console.print(f"[green]✓ Registered successfully![/green]")
                 console.print(f"  User ID: {result['id']}")
                 console.print(f"  Email: {result['email']}")
-                console.print("\nRun [bold]clubai login[/bold] to authenticate.")
+                console.print("\nRun [bold]iris login[/bold] to authenticate.")
             except APIError as e:
                 console.print(f"[red]✗ Registration failed: {e}[/red]")
                 raise typer.Exit(1)
@@ -75,7 +75,7 @@ def login(
     password: str = typer.Option(..., "--password", "-p", prompt=True, hide_input=True, help="Password"),
     url: str = typer.Option(DEFAULT_URL, "--url", "-u", help="Coordinator URL")
 ):
-    """Login to your ClubAI account."""
+    """Login to your Iris account."""
     async def _login():
         async with get_client(url) as client:
             try:
@@ -149,7 +149,7 @@ def ask(
     async def _ask():
         async with get_client(url) as client:
             if not client.is_authenticated:
-                console.print("[red]✗ Not logged in. Run 'clubai login' first.[/red]")
+                console.print("[red]✗ Not logged in. Run 'iris login' first.[/red]")
                 raise typer.Exit(1)
 
             try:
@@ -157,7 +157,7 @@ def ask(
                     task_id = await client.ask_async(prompt, task_mode)
                     console.print(f"[green]✓ Task submitted![/green]")
                     console.print(f"  Task ID: {task_id}")
-                    console.print(f"\nCheck status with: clubai status {task_id}")
+                    console.print(f"\nCheck status with: iris status {task_id}")
                 else:
                     with Progress(
                         SpinnerColumn(),
@@ -191,7 +191,7 @@ def status(
     async def _status():
         async with get_client(url) as client:
             if not client.is_authenticated:
-                console.print("[red]✗ Not logged in. Run 'clubai login' first.[/red]")
+                console.print("[red]✗ Not logged in. Run 'iris login' first.[/red]")
                 raise typer.Exit(1)
 
             try:
@@ -243,7 +243,7 @@ def nodes(
     async def _nodes():
         async with get_client(url) as client:
             if not client.is_authenticated:
-                console.print("[red]✗ Not logged in. Run 'clubai login' first.[/red]")
+                console.print("[red]✗ Not logged in. Run 'iris login' first.[/red]")
                 raise typer.Exit(1)
 
             try:
@@ -368,7 +368,7 @@ def history(
     async def _history():
         async with get_client(url) as client:
             if not client.is_authenticated:
-                console.print("[red]✗ Not logged in. Run 'clubai login' first.[/red]")
+                console.print("[red]✗ Not logged in. Run 'iris login' first.[/red]")
                 raise typer.Exit(1)
 
             try:

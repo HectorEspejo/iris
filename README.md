@@ -1,4 +1,4 @@
-# ClubAI - Distributed AI Inference Network
+# Iris - Distributed AI Inference Network
 
 A distributed AI inference network where members pay a monthly fee for access, contribute compute nodes running LM Studio, and earn rewards based on reputation.
 

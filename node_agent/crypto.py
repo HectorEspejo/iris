@@ -1,5 +1,5 @@
 """
-ClubAI Node Agent Cryptography
+Iris Node Agent Cryptography
 
 Manages the node's key pair for E2E encryption.
 """

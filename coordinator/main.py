@@ -1,14 +1,15 @@
 """
-ClubAI Coordinator - Main Application
+Iris Coordinator - Main Application
 
 FastAPI server that orchestrates the distributed inference network.
 """
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
+from pydantic import BaseModel as PydanticBaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
 
@@ -27,6 +28,7 @@ from .database import db
 from .auth import register_user, login_user, get_current_user, get_user_info
 from .crypto import coordinator_crypto
 from .node_registry import node_registry
+from .node_tokens import NodeTokenManager, TokenValidationResult
 
 # Configure structured logging
 structlog.configure(
@@ -49,14 +51,22 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
+# Global token manager - initialized on startup
+token_manager: NodeTokenManager = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
+    global token_manager
+
     # Startup
     logger.info("coordinator_starting")
     await db.connect()
     coordinator_crypto.initialize()
+    token_manager = NodeTokenManager(db)
+    # Connect token manager to node registry for enrollment validation
+    node_registry.set_token_manager(token_manager)
     logger.info(
         "coordinator_started",
         public_key=coordinator_crypto.public_key[:16] + "..."
@@ -72,8 +82,8 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="ClubAI Coordinator",
-    description="Central coordinator for the ClubAI distributed inference network",
+    title="Iris Coordinator",
+    description="Central coordinator for the Iris distributed inference network",
     version="0.1.0",
     lifespan=lifespan
 )
@@ -254,6 +264,124 @@ async def api_history(
     """Get user's task history."""
     tasks = await db.get_tasks_by_user(user.id, limit=limit)
     return tasks
+
+
+# =============================================================================
+# Node Enrollment Token Endpoints
+# =============================================================================
+
+
+class ValidateTokenRequest(PydanticBaseModel):
+    """Request to validate an enrollment token."""
+    token: str
+
+
+class GenerateTokenRequest(PydanticBaseModel):
+    """Request to generate a new enrollment token."""
+    label: Optional[str] = None
+    expires_in_days: Optional[int] = None
+
+
+class GenerateTokenResponse(PydanticBaseModel):
+    """Response after generating an enrollment token."""
+    token: str
+    id: str
+    expires_at: Optional[str] = None
+
+
+@app.post("/nodes/validate-token", response_model=TokenValidationResult)
+async def api_validate_token(request: ValidateTokenRequest):
+    """
+    Validate an enrollment token.
+
+    This endpoint is public and used by the installer script to verify
+    that a token is valid before proceeding with installation.
+    """
+    return await token_manager.validate(request.token)
+
+
+@app.post("/admin/tokens/generate", response_model=GenerateTokenResponse)
+async def api_generate_token(
+    request: GenerateTokenRequest,
+    user: User = Depends(get_current_user)
+):
+    """
+    Generate a new enrollment token.
+
+    Requires authentication. In production, should require admin role.
+    """
+    token, token_id = await token_manager.generate(
+        label=request.label,
+        expires_in_days=request.expires_in_days
+    )
+
+    # Calculate expiration date if provided
+    expires_at = None
+    if request.expires_in_days:
+        from datetime import datetime, timedelta
+        expires_at = (datetime.utcnow() + timedelta(days=request.expires_in_days)).isoformat()
+
+    return GenerateTokenResponse(
+        token=token,
+        id=token_id,
+        expires_at=expires_at
+    )
+
+
+@app.get("/admin/tokens")
+async def api_list_tokens(
+    user: User = Depends(get_current_user),
+    include_used: bool = True,
+    include_revoked: bool = False
+):
+    """
+    List all enrollment tokens.
+
+    Requires authentication. In production, should require admin role.
+    """
+    tokens = await token_manager.list_tokens(
+        include_used=include_used,
+        include_revoked=include_revoked
+    )
+    return [t.model_dump() for t in tokens]
+
+
+@app.get("/admin/tokens/{token_id}")
+async def api_get_token(
+    token_id: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Get information about a specific token.
+
+    Requires authentication. In production, should require admin role.
+    """
+    token_info = await token_manager.get_token_info(token_id)
+    if not token_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Token not found"
+        )
+    return token_info.model_dump()
+
+
+@app.delete("/admin/tokens/{token_id}")
+async def api_revoke_token(
+    token_id: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Revoke an enrollment token.
+
+    Requires authentication. In production, should require admin role.
+    """
+    success = await token_manager.revoke(token_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Token not found"
+        )
+    return {"success": True, "message": f"Token {token_id} revoked"}
 
 
 # =============================================================================

@@ -1,5 +1,5 @@
 """
-ClubAI Database Layer
+Iris Database Layer
 
 SQLite database with async support using aiosqlite.
 """
@@ -112,12 +112,26 @@ CREATE TABLE IF NOT EXISTS node_earnings (
     PRIMARY KEY (period_id, node_id)
 );
 
+-- Node enrollment tokens
+CREATE TABLE IF NOT EXISTS node_tokens (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP,
+    used_at TIMESTAMP,
+    used_by_node_id TEXT REFERENCES nodes(id),
+    revoked BOOLEAN DEFAULT FALSE,
+    label TEXT
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id);
 CREATE INDEX IF NOT EXISTS idx_subtasks_node ON subtasks(node_id);
 CREATE INDEX IF NOT EXISTS idx_reputation_log_node ON reputation_log(node_id);
+CREATE INDEX IF NOT EXISTS idx_node_tokens_hash ON node_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_node_tokens_node ON node_tokens(used_by_node_id);
 """
 
 # Migration queries for existing databases
@@ -133,13 +147,26 @@ MIGRATIONS = [
     # Add indexes for new columns (after columns exist)
     "CREATE INDEX IF NOT EXISTS idx_tasks_difficulty ON tasks(difficulty)",
     "CREATE INDEX IF NOT EXISTS idx_nodes_tier ON nodes(node_tier)",
+    # Add node_tokens table for enrollment system
+    """CREATE TABLE IF NOT EXISTS node_tokens (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP,
+        used_at TIMESTAMP,
+        used_by_node_id TEXT REFERENCES nodes(id),
+        revoked BOOLEAN DEFAULT FALSE,
+        label TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_node_tokens_hash ON node_tokens(token_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_node_tokens_node ON node_tokens(used_by_node_id)",
 ]
 
 
 class Database:
     """Async SQLite database manager."""
 
-    def __init__(self, db_path: str = "data/clubai.db"):
+    def __init__(self, db_path: str = "data/iris.db"):
         self.db_path = Path(db_path)
         self._connection: Optional[aiosqlite.Connection] = None
 

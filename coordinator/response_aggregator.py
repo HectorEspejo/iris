@@ -1,5 +1,5 @@
 """
-ClubAI Response Aggregator
+Iris Response Aggregator
 
 Combines responses from multiple subtasks into a coherent final response.
 """

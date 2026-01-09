@@ -1,5 +1,5 @@
 """
-ClubAI Task Orchestrator
+Iris Task Orchestrator
 
 Handles task division, node assignment, and task lifecycle management.
 """

@@ -1,5 +1,5 @@
 """
-ClubAI Reputation System
+Iris Reputation System
 
 Tracks and manages node reputation scores based on performance.
 """

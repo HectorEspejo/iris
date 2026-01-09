@@ -1,5 +1,5 @@
 """
-ClubAI Coordinator Cryptography
+Iris Coordinator Cryptography
 
 Manages the coordinator's key pair for E2E encryption.
 """

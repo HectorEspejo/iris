@@ -1,5 +1,5 @@
 """
-ClubAI Node Registry
+Iris Node Registry
 
 Manages connected nodes and their status.
 """
@@ -24,6 +24,7 @@ from shared.protocol import (
 )
 from .database import db
 from .crypto import coordinator_crypto
+from .node_tokens import NodeTokenManager
 
 logger = structlog.get_logger()
 
@@ -135,6 +136,11 @@ class NodeRegistry:
     def __init__(self):
         self._nodes: dict[str, ConnectedNode] = {}
         self._lock = asyncio.Lock()
+        self._token_manager: Optional[NodeTokenManager] = None
+
+    def set_token_manager(self, token_manager: NodeTokenManager) -> None:
+        """Set the token manager for enrollment validation."""
+        self._token_manager = token_manager
 
     @property
     def connected_count(self) -> int:
@@ -174,11 +180,82 @@ class NodeRegistry:
         try:
             payload = parse_payload(message, NodeRegisterPayload)
 
+            # Check enrollment token if token manager is configured
+            if self._token_manager:
+                # Check if this node was already enrolled
+                is_enrolled = await self._token_manager.is_node_enrolled(payload.node_id)
+
+                if not is_enrolled:
+                    # New node - must provide valid enrollment token
+                    if not payload.enrollment_token:
+                        logger.warning(
+                            "node_registration_no_token",
+                            node_id=payload.node_id
+                        )
+                        # Send failure acknowledgment
+                        ack = ProtocolMessage.create(
+                            MessageType.REGISTER_ACK,
+                            RegisterAckPayload(
+                                success=False,
+                                coordinator_public_key="",
+                                message="Enrollment token required for new nodes"
+                            )
+                        )
+                        await websocket.send_text(ack.to_json())
+                        return None
+
+                    # Validate the enrollment token
+                    validation = await self._token_manager.validate(payload.enrollment_token)
+                    if not validation.valid:
+                        logger.warning(
+                            "node_registration_invalid_token",
+                            node_id=payload.node_id,
+                            error=validation.error
+                        )
+                        # Send failure acknowledgment
+                        ack = ProtocolMessage.create(
+                            MessageType.REGISTER_ACK,
+                            RegisterAckPayload(
+                                success=False,
+                                coordinator_public_key="",
+                                message=f"Invalid enrollment token: {validation.error}"
+                            )
+                        )
+                        await websocket.send_text(ack.to_json())
+                        return None
+
+                    # Consume the token (mark as used)
+                    consumed = await self._token_manager.consume(
+                        payload.enrollment_token,
+                        payload.node_id
+                    )
+                    if not consumed:
+                        logger.error(
+                            "node_registration_token_consume_failed",
+                            node_id=payload.node_id
+                        )
+                        ack = ProtocolMessage.create(
+                            MessageType.REGISTER_ACK,
+                            RegisterAckPayload(
+                                success=False,
+                                coordinator_public_key="",
+                                message="Failed to consume enrollment token"
+                            )
+                        )
+                        await websocket.send_text(ack.to_json())
+                        return None
+
+                    logger.info(
+                        "node_enrolled_with_token",
+                        node_id=payload.node_id,
+                        token_id=validation.token_id
+                    )
+
             async with self._lock:
-                # Check if already registered
+                # Check if already connected (reconnection)
                 if payload.node_id in self._nodes:
-                    logger.warning(
-                        "node_already_registered",
+                    logger.info(
+                        "node_reconnecting",
                         node_id=payload.node_id
                     )
                     # Update existing connection

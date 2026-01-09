@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "clubai"
+name = "iris"
 version = "0.1.0"
-description = "ClubAI - Distributed AI Inference Network"
+description = "Iris - Distributed AI Inference Network"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -35,7 +35,7 @@ windows = [
 ]
 
 [project.scripts]
-clubai = "client.cli:main"
+iris = "client.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["client*", "coordinator*", "node_agent*", "shared*"]

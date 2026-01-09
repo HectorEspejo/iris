@@ -1,5 +1,5 @@
 """
-ClubAI Pydantic Models
+Iris Pydantic Models
 
 Shared data models for users, nodes, tasks, and economic tracking.
 """

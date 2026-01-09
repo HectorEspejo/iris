@@ -1,5 +1,5 @@
 """
-ClubAI Node Agent
+Iris Node Agent
 
 Agent that runs on each node to connect to the coordinator
 and execute inference tasks using LM Studio.
