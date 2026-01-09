@@ -183,7 +183,7 @@ class NodeTokenManager:
         self.db = db
         self._coordinator_ws_url = os.environ.get(
             "COORDINATOR_WS_URL",
-            "wss://168.119.10.189:8000/nodes/connect"
+            "ws://168.119.10.189:8000/nodes/connect"
         )
 
     async def generate(

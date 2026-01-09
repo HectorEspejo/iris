@@ -33,7 +33,7 @@ else:
 from node_agent.main import NodeAgent
 
 VERSION = "1.0.0"
-DEFAULT_COORDINATOR = "wss://168.119.10.189:8000/nodes/connect"
+DEFAULT_COORDINATOR = "ws://168.119.10.189:8000/nodes/connect"
 DEFAULT_LMSTUDIO = "http://localhost:1234/v1"
 
 

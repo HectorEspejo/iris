@@ -66,7 +66,7 @@ class NodeAgent:
     def __init__(
         self,
         node_id: str,
-        coordinator_url: str = "wss://168.119.10.189:8000/nodes/connect",
+        coordinator_url: str = "ws://168.119.10.189:8000/nodes/connect",
         lmstudio_url: str = "http://localhost:1234/v1",
         key_path: str = "data/node.key",
         enrollment_token: Optional[str] = None
@@ -440,7 +440,7 @@ async def main():
     node_id = os.environ.get("NODE_ID", f"node-{os.getpid()}")
     coordinator_url = os.environ.get(
         "COORDINATOR_URL",
-        "wss://168.119.10.189:8000/nodes/connect"  # Default production coordinator
+        "ws://168.119.10.189:8000/nodes/connect"  # Default production coordinator
     )
     lmstudio_url = os.environ.get(
         "LMSTUDIO_URL",
