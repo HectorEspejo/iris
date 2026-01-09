@@ -76,7 +76,7 @@ build_current_platform() {
     rm -rf build dist __pycache__
 
     # Run PyInstaller
-    python3 -m PyInstaller clubai-node.spec --clean
+    python3 -m PyInstaller iris-node.spec --clean
 
     # Get output name
     OUTPUT_NAME=$(ls dist/ | head -1)
@@ -111,8 +111,8 @@ build_all_platforms() {
             cd /src && \
             pip install pyinstaller pyyaml websockets httpx structlog cryptography pydantic && \
             cd node_agent && \
-            python -m PyInstaller clubai-node.spec --clean && \
-            cp dist/clubai-node-* /src/dist/v$VERSION/
+            python -m PyInstaller iris-node.spec --clean && \
+            cp dist/iris-node-* /src/dist/v$VERSION/
         "
 
     # Build for Linux ARM64 (requires ARM Docker host or buildx)
@@ -124,8 +124,8 @@ build_all_platforms() {
                 cd /src && \
                 pip install pyinstaller pyyaml websockets httpx structlog cryptography pydantic && \
                 cd node_agent && \
-                python -m PyInstaller clubai-node.spec --clean && \
-                cp dist/clubai-node-* /src/dist/v$VERSION/
+                python -m PyInstaller iris-node.spec --clean && \
+                cp dist/iris-node-* /src/dist/v$VERSION/
             " 2>/dev/null || print_warning "ARM64 build skipped (no ARM support)"
     fi
 
@@ -214,7 +214,7 @@ main() {
     print_success "Build completed successfully!"
     echo ""
     echo "Next steps:"
-    echo "  1. Test the binary: $BUILD_DIR/v$VERSION/clubai-node-* --help"
+    echo "  1. Test the binary: $BUILD_DIR/v$VERSION/iris-node-* --help"
     echo "  2. Upload to GitHub releases"
     echo "  3. Update download URLs in install.sh and install.ps1"
 }
