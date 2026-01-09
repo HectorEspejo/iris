@@ -146,11 +146,19 @@ Environment Variables:
 
     args = parser.parse_args()
 
-    # Load config file if provided
+    # Load config file - auto-detect if not specified
     config = {}
-    if args.config:
+    config_path = args.config
+
+    # Auto-detect config file if not provided
+    if not config_path:
+        default_config = Path.home() / '.iris' / 'config.yaml'
+        if default_config.exists():
+            config_path = default_config
+
+    if config_path:
         try:
-            config = load_config(args.config)
+            config = load_config(config_path)
         except FileNotFoundError as e:
             print(f"Error: {e}")
             sys.exit(1)
@@ -202,6 +210,8 @@ Environment Variables:
         print_banner()
 
     # Print configuration
+    if config_path:
+        print(f"  Config:         {config_path}")
     print(f"  Node ID:        {node_id}")
     print(f"  Coordinator:    {coordinator_url}")
     print(f"  LM Studio:      {lmstudio_url}")

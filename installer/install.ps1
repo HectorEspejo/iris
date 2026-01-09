@@ -13,6 +13,7 @@ param(
     [string]$EnrollmentToken,
     [string]$LMStudioUrl = "http://localhost:1234/v1",
     [switch]$NoService,
+    [switch]$Uninstall,
     [switch]$Help
 )
 
@@ -95,12 +96,103 @@ function Show-Help {
     Write-Host "  -EnrollmentToken <token>  Use existing enrollment token (skip auth)"
     Write-Host "  -LMStudioUrl <url>        LM Studio URL (default: http://localhost:1234/v1)"
     Write-Host "  -NoService                Skip Windows Service installation"
+    Write-Host "  -Uninstall                Completely uninstall (removes all data)"
     Write-Host "  -Help                     Show this help message"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\install.ps1"
     Write-Host "  .\install.ps1 -EnrollmentToken 'iris_v1.eyJ...'"
+    Write-Host "  .\install.ps1 -Uninstall"
     Write-Host ""
+    exit 0
+}
+
+# =============================================================================
+# Uninstall
+# =============================================================================
+
+function Uninstall-Node {
+    Write-Banner
+    Write-Step "Uninstalling Iris Node Agent..."
+
+    Write-Host ""
+    Write-Host "  ${Yellow}WARNING!${Reset}"
+    Write-Host "  This action will remove:"
+    Write-Host "    - The iris-node binary"
+    Write-Host "    - All configuration"
+    Write-Host "    - All data and logs"
+    Write-Host "    - The Windows service/startup shortcut"
+    Write-Host "    - The node will disappear from the network"
+    Write-Host ""
+
+    $Confirm = Read-Host "  Are you sure? Type 'DELETE' to confirm"
+
+    if ($Confirm -ne "DELETE") {
+        Write-Info "Uninstall cancelled"
+        exit 0
+    }
+
+    Write-Host ""
+
+    # Stop and remove Windows Service
+    $ServiceName = "IrisNode"
+    $Service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+
+    if ($Service) {
+        Write-Info "Stopping Windows service..."
+        try {
+            Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+            $NssmPath = Get-Command nssm -ErrorAction SilentlyContinue
+            if ($NssmPath) {
+                & nssm remove $ServiceName confirm 2>$null
+            } else {
+                sc.exe delete $ServiceName 2>$null
+            }
+            Write-Success "Windows service removed"
+        }
+        catch {
+            Write-Warning "Could not remove service: $($_.Exception.Message)"
+        }
+    }
+
+    # Remove startup shortcut
+    $StartupFolder = [Environment]::GetFolderPath("Startup")
+    $ShortcutPath = "$StartupFolder\IrisNode.lnk"
+    if (Test-Path $ShortcutPath) {
+        Write-Info "Removing startup shortcut..."
+        Remove-Item -Path $ShortcutPath -Force
+        Write-Success "Startup shortcut removed"
+    }
+
+    # Remove from PATH
+    Write-Info "Cleaning PATH..."
+    $BinPath = "$InstallDir\bin"
+    $CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($CurrentPath -like "*$BinPath*") {
+        $NewPath = ($CurrentPath -split ";" | Where-Object { $_ -ne $BinPath }) -join ";"
+        [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+        Write-Success "PATH cleaned"
+    }
+
+    # Remove installation directory
+    if (Test-Path $InstallDir) {
+        Write-Info "Removing installation directory..."
+        Remove-Item -Path $InstallDir -Recurse -Force
+        Write-Success "Directory $InstallDir removed"
+    }
+    else {
+        Write-Warning "Directory $InstallDir not found"
+    }
+
+    Write-Host ""
+    Write-Host "${Green}  +=====================================================================+${Reset}"
+    Write-Host "${Green}  |                    Uninstall Complete                               |${Reset}"
+    Write-Host "${Green}  +=====================================================================+${Reset}"
+    Write-Host ""
+    Write-Host "  ${Cyan}Your node has been removed from Iris Network.${Reset}"
+    Write-Host "  Thank you for participating."
+    Write-Host ""
+
     exit 0
 }
 
@@ -537,6 +629,10 @@ function Show-Completion {
 function Main {
     if ($Help) {
         Show-Help
+    }
+
+    if ($Uninstall) {
+        Uninstall-Node
     }
 
     Write-Banner

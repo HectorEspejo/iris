@@ -1,0 +1,288 @@
+/* Iris Network TUI Styles */
+
+Screen {
+    background: $surface;
+}
+
+/* Header */
+Header {
+    dock: top;
+    height: 3;
+    background: $primary;
+}
+
+/* Footer */
+Footer {
+    dock: bottom;
+    height: 1;
+    background: $primary-darken-2;
+}
+
+/* Section titles */
+.section-title {
+    text-style: bold;
+    color: $accent;
+    padding: 1 1;
+    text-align: center;
+    background: $surface-darken-1;
+    margin-bottom: 1;
+}
+
+/* Stats row */
+.stats-row {
+    height: auto;
+    margin: 1 0;
+    padding: 0 1;
+}
+
+/* Stats card */
+StatsCard {
+    width: 1fr;
+    height: 7;
+    border: solid $primary;
+    padding: 1 2;
+    margin: 0 1;
+    background: $surface-lighten-1;
+}
+
+StatsCard .card-icon {
+    text-align: center;
+    color: $accent;
+}
+
+StatsCard .card-value {
+    text-align: center;
+    text-style: bold;
+    color: $text;
+    padding: 1 0;
+}
+
+StatsCard .card-label {
+    text-align: center;
+    color: $text-muted;
+}
+
+/* Status indicator */
+StatusIndicator {
+    width: auto;
+    height: 1;
+    padding: 0 1;
+}
+
+StatusIndicator.connected {
+    color: $success;
+}
+
+StatusIndicator.disconnected {
+    color: $error;
+}
+
+StatusIndicator.connecting {
+    color: $warning;
+}
+
+/* Node info panel */
+.node-info-panel {
+    height: auto;
+    border: solid $primary;
+    padding: 1 2;
+    margin: 1;
+    background: $surface-lighten-1;
+}
+
+.node-info-row {
+    height: 1;
+    padding: 0 1;
+}
+
+.node-info-label {
+    width: 15;
+    color: $text-muted;
+}
+
+.node-info-value {
+    color: $text;
+    text-style: bold;
+}
+
+/* Data tables */
+DataTable {
+    height: auto;
+    max-height: 15;
+    margin: 1;
+    border: solid $primary;
+}
+
+DataTable > .datatable--header {
+    background: $primary;
+    color: $text;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $accent;
+}
+
+/* Tier colors */
+.tier-premium {
+    color: #ffd700;
+    text-style: bold;
+}
+
+.tier-standard {
+    color: #c0c0c0;
+}
+
+.tier-basic {
+    color: #cd7f32;
+}
+
+/* Reputation bar */
+.reputation-container {
+    height: 3;
+    margin: 1;
+    padding: 0 1;
+}
+
+.reputation-bar {
+    height: 1;
+    background: $surface-darken-1;
+    border: solid $primary;
+}
+
+.reputation-fill {
+    height: 1;
+    background: $success;
+}
+
+.reputation-label {
+    text-align: right;
+    color: $text-muted;
+    padding-right: 1;
+}
+
+/* Chat */
+.chat-container {
+    height: 1fr;
+    padding: 1;
+}
+
+#messages {
+    height: 1fr;
+    border: solid $primary;
+    padding: 1;
+    margin-bottom: 1;
+    background: $surface-lighten-1;
+}
+
+.message {
+    margin-bottom: 1;
+    padding: 1;
+    border: solid $primary-darken-1;
+}
+
+.message-user {
+    background: $primary-darken-2;
+    border: solid $primary;
+}
+
+.message-assistant {
+    background: $surface-lighten-2;
+    border: solid $accent;
+}
+
+.message-header {
+    color: $accent;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.input-area {
+    height: auto;
+    padding: 1 0;
+}
+
+#mode-select, #difficulty-select {
+    width: 20;
+    margin-right: 1;
+}
+
+#prompt-input {
+    height: 5;
+    border: solid $accent;
+    margin: 1 0;
+}
+
+#send-btn {
+    margin-top: 1;
+}
+
+#status-text {
+    margin-left: 2;
+    padding: 1;
+    color: $text-muted;
+}
+
+/* Leaderboard */
+.leaderboard-item {
+    padding: 0 1;
+    height: 2;
+}
+
+.leaderboard-rank {
+    width: 4;
+    text-align: center;
+}
+
+.leaderboard-node {
+    width: 1fr;
+}
+
+.leaderboard-rep {
+    width: 10;
+    text-align: right;
+}
+
+.leaderboard-tasks {
+    width: 12;
+    text-align: right;
+    color: $text-muted;
+}
+
+/* Network screen layout */
+NetworkScreen {
+    layout: vertical;
+    padding: 1;
+}
+
+/* Node screen layout */
+NodeScreen {
+    layout: vertical;
+    padding: 1;
+}
+
+/* Chat screen layout */
+ChatScreen {
+    layout: vertical;
+    padding: 1;
+}
+
+/* Log area */
+RichLog {
+    height: 10;
+    border: solid $primary;
+    margin: 1;
+    background: $surface-darken-1;
+}
+
+/* Scrollable containers */
+VerticalScroll {
+    height: 1fr;
+}
+
+/* Welcome/empty state */
+.empty-state {
+    text-align: center;
+    color: $text-muted;
+    padding: 3;
+}

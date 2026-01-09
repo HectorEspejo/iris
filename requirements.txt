@@ -21,6 +21,9 @@ httpx>=0.26.0
 # CLI
 typer[all]>=0.9.0
 
+# TUI
+textual>=0.45.0
+
 # Authentication
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.0

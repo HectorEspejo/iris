@@ -73,6 +73,28 @@ EOF
 ./iris-node --config config.yaml
 ```
 
+### Interactive TUI Dashboard
+
+Launch the interactive terminal dashboard:
+
+```bash
+# Run TUI
+python -m client.tui
+
+# Or via CLI
+python -m client.cli tui
+
+# With node config
+python -m client.cli tui --config ~/.iris/config.yaml
+```
+
+The TUI provides:
+- **Network Tab** - Live stats, active nodes, reputation leaderboard
+- **Node Tab** - Your node status, performance metrics, activity log
+- **Chat Tab** - Interactive chat interface to send inference requests
+
+**Keyboard shortcuts:** `1` Node | `2` Network | `3` Chat | `R` Refresh | `Q` Quit
+
 ### After Installation
 
 ```bash
@@ -89,6 +111,29 @@ sudo systemctl restart iris-node
 # Service commands (macOS)
 launchctl list | grep iris
 ```
+
+### Uninstall
+
+To completely remove the node and all data:
+
+**Linux / macOS:**
+```bash
+curl -fsSL https://iris.network/install.sh | bash -s -- --uninstall
+# Or if you have the script locally:
+./install.sh --uninstall
+```
+
+**Windows (PowerShell):**
+```powershell
+.\install.ps1 -Uninstall
+```
+
+This will:
+- Stop and remove the system service
+- Remove the binary and all configuration
+- Delete all data and logs
+- Clean up PATH entries
+- The node will disappear from the network
 
 ---
 

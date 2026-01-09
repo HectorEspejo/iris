@@ -30,7 +30,7 @@ app = typer.Typer(
 console = Console()
 
 # Default configuration
-DEFAULT_URL = "http://localhost:8000"
+DEFAULT_URL = "http://168.119.10.189:8000"
 
 
 def get_client(url: str = DEFAULT_URL) -> IrisClient:
@@ -415,6 +415,26 @@ def history(
                 raise typer.Exit(1)
 
     run_async(_history())
+
+
+# =============================================================================
+# TUI Command
+# =============================================================================
+
+@app.command()
+def tui(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Node config file path"),
+    url: str = typer.Option("http://168.119.10.189:8000", "--url", "-u", help="Coordinator URL")
+):
+    """Launch interactive TUI dashboard."""
+    try:
+        from client.tui import IrisTUI
+        tui_app = IrisTUI(config_path=config, coordinator_url=url)
+        tui_app.run()
+    except ImportError:
+        console.print("[red]TUI requires textual library. Install with:[/red]")
+        console.print("  pip install textual")
+        raise typer.Exit(1)
 
 
 # =============================================================================

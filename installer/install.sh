@@ -19,9 +19,8 @@ COORDINATOR_WS="ws://${COORDINATOR_IP}:${COORDINATOR_PORT}/nodes/connect"
 INSTALL_DIR="$HOME/.iris"
 BIN_NAME="iris-node"
 
-# GitHub release URL
-GITHUB_REPO="iris-network/iris-node"
-DOWNLOAD_BASE="https://github.com/${GITHUB_REPO}/releases/download/v${VERSION}"
+# Download URL from coordinator server
+DOWNLOAD_BASE="${COORDINATOR_URL}/downloads"
 
 # Colors
 RED='\033[0;31m'
@@ -337,9 +336,77 @@ download_binary() {
         print_success "Binario instalado en $INSTALL_DIR/bin/$BIN_NAME"
     else
         print_warning "No se pudo descargar el binario pre-compilado"
-        print_info "Usando instalación desde Python..."
+        print_info "Creando wrapper script para Python..."
         PYTHON_MODE=true
+        create_python_wrapper
     fi
+}
+
+create_python_wrapper() {
+    # Find Python with correct priority
+    # 1. conda/miniconda (usually has packages)
+    # 2. homebrew python
+    # 3. system python
+    PYTHON_BIN=""
+    PYTHON_PATH=""
+
+    # Check for conda Python first
+    if [ -f "$HOME/miniconda3/bin/python3" ]; then
+        PYTHON_PATH="$HOME/miniconda3/bin/python3"
+        PYTHON_BIN="$PYTHON_PATH"
+    elif [ -f "$HOME/anaconda3/bin/python3" ]; then
+        PYTHON_PATH="$HOME/anaconda3/bin/python3"
+        PYTHON_BIN="$PYTHON_PATH"
+    elif [ -f "/opt/homebrew/bin/python3" ]; then
+        PYTHON_PATH="/opt/homebrew/bin/python3"
+        PYTHON_BIN="$PYTHON_PATH"
+    elif [ -f "/usr/local/bin/python3" ]; then
+        PYTHON_PATH="/usr/local/bin/python3"
+        PYTHON_BIN="$PYTHON_PATH"
+    elif command_exists python3; then
+        PYTHON_PATH=$(which python3)
+        PYTHON_BIN="python3"
+    elif command_exists python; then
+        PYTHON_PATH=$(which python)
+        PYTHON_BIN="python"
+    else
+        print_error "Python no encontrado. Instala Python 3.9+ primero."
+        exit 1
+    fi
+
+    print_info "Usando Python: $PYTHON_PATH"
+
+    # Install dependencies using the found Python
+    print_info "Instalando dependencias de Python..."
+    $PYTHON_BIN -m pip install --quiet --upgrade pip 2>/dev/null || true
+    $PYTHON_BIN -m pip install --quiet pyyaml httpx websockets structlog cryptography pydantic 2>/dev/null || true
+
+    # Create wrapper script with explicit Python path
+    cat > "$INSTALL_DIR/bin/$BIN_NAME" << WRAPPER_EOF
+#!${PYTHON_PATH}
+"""Iris Node Agent Wrapper"""
+import sys
+import os
+
+# Add project to path if running from source
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.expanduser("~/Documents/clubai")
+if os.path.exists(project_root):
+    sys.path.insert(0, project_root)
+
+# Try to import and run
+try:
+    from node_agent.standalone_main import main
+    main()
+except ImportError as e:
+    print(f"Error: Could not import node_agent module: {e}")
+    print("\\nMake sure you have the Iris source code at ~/Documents/clubai")
+    print("Or install the package: pip install iris-node")
+    sys.exit(1)
+WRAPPER_EOF
+
+    chmod +x "$INSTALL_DIR/bin/$BIN_NAME"
+    print_success "Wrapper script creado en $INSTALL_DIR/bin/$BIN_NAME"
 }
 
 # =============================================================================
@@ -568,6 +635,107 @@ print_completion() {
 }
 
 # =============================================================================
+# Uninstall
+# =============================================================================
+
+uninstall_node() {
+    print_banner
+    print_step "Desinstalando Iris Node Agent..."
+
+    echo ""
+    echo -e "  ${YELLOW}¡ADVERTENCIA!${NC}"
+    echo -e "  Esta acción eliminará:"
+    echo -e "    • El binario de iris-node"
+    echo -e "    • Toda la configuración"
+    echo -e "    • Todos los datos y logs"
+    echo -e "    • El servicio del sistema"
+    echo -e "    • El nodo desaparecerá de la red"
+    echo ""
+    read -p "  ¿Estás seguro? Escribe 'ELIMINAR' para confirmar: " confirm
+
+    if [ "$confirm" != "ELIMINAR" ]; then
+        print_info "Desinstalación cancelada"
+        exit 0
+    fi
+
+    echo ""
+
+    # Detect OS for service removal
+    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
+    # Stop and remove service
+    if [ "$OS" = "linux" ]; then
+        if systemctl is-active --quiet iris-node 2>/dev/null; then
+            print_info "Deteniendo servicio systemd..."
+            sudo systemctl stop iris-node 2>/dev/null || true
+            sudo systemctl disable iris-node 2>/dev/null || true
+        fi
+        if [ -f "/etc/systemd/system/iris-node.service" ]; then
+            print_info "Eliminando servicio systemd..."
+            sudo rm -f "/etc/systemd/system/iris-node.service"
+            sudo systemctl daemon-reload 2>/dev/null || true
+            print_success "Servicio systemd eliminado"
+        fi
+    elif [ "$OS" = "darwin" ]; then
+        PLIST_FILE="$HOME/Library/LaunchAgents/network.iris.node.plist"
+        if [ -f "$PLIST_FILE" ]; then
+            print_info "Deteniendo servicio launchd..."
+            launchctl unload "$PLIST_FILE" 2>/dev/null || true
+            rm -f "$PLIST_FILE"
+            print_success "Servicio launchd eliminado"
+        fi
+    fi
+
+    # Remove symlink from /usr/local/bin
+    if [ -L "/usr/local/bin/$BIN_NAME" ]; then
+        print_info "Eliminando symlink..."
+        if [ -w "/usr/local/bin" ]; then
+            rm -f "/usr/local/bin/$BIN_NAME"
+        else
+            sudo rm -f "/usr/local/bin/$BIN_NAME" 2>/dev/null || true
+        fi
+        print_success "Symlink eliminado"
+    fi
+
+    # Remove PATH from shell config
+    for config_file in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+        if [ -f "$config_file" ] && grep -q ".iris/bin" "$config_file"; then
+            print_info "Limpiando $config_file..."
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                sed -i '' '/# Iris Network Node Agent/d' "$config_file" 2>/dev/null || true
+                sed -i '' '/\.iris\/bin/d' "$config_file" 2>/dev/null || true
+            else
+                sed -i '/# Iris Network Node Agent/d' "$config_file" 2>/dev/null || true
+                sed -i '/\.iris\/bin/d' "$config_file" 2>/dev/null || true
+            fi
+            print_success "PATH limpiado de $config_file"
+        fi
+    done
+
+    # Remove installation directory
+    if [ -d "$INSTALL_DIR" ]; then
+        print_info "Eliminando directorio de instalación..."
+        rm -rf "$INSTALL_DIR"
+        print_success "Directorio $INSTALL_DIR eliminado"
+    else
+        print_warning "Directorio $INSTALL_DIR no encontrado"
+    fi
+
+    echo ""
+    echo -e "${GREEN}"
+    echo "  ╔═══════════════════════════════════════════════════════════════════╗"
+    echo "  ║              Desinstalación Completada                            ║"
+    echo "  ╚═══════════════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+    echo -e "  ${CYAN}Tu nodo ha sido eliminado de Iris Network.${NC}"
+    echo -e "  Gracias por participar."
+    echo ""
+
+    exit 0
+}
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -582,8 +750,14 @@ main() {
         echo "  -h, --help      Mostrar esta ayuda"
         echo "  --token TOKEN   Usar token de enrollment existente"
         echo "  --no-service    No instalar como servicio"
+        echo "  --uninstall     Desinstalar completamente (elimina todos los datos)"
         echo ""
         exit 0
+    fi
+
+    # Check for uninstall
+    if [ "$1" = "--uninstall" ]; then
+        uninstall_node
     fi
 
     # Parse arguments
@@ -597,6 +771,9 @@ main() {
             --no-service)
                 SKIP_SERVICE=true
                 shift
+                ;;
+            --uninstall)
+                uninstall_node
                 ;;
             *)
                 shift
@@ -627,10 +804,8 @@ main() {
     # Step 5: Download binary
     download_binary
 
-    # Step 6: Setup PATH
-    if [ "$PYTHON_MODE" != true ]; then
-        setup_path
-    fi
+    # Step 6: Setup PATH (always, regardless of mode)
+    setup_path
 
     # Step 7: Configure
     configure_node
