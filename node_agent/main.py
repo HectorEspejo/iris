@@ -324,27 +324,40 @@ class NodeAgent:
 
             logger.debug("task_decrypted", subtask_id=payload.subtask_id)
 
-            # Execute via LM Studio with proper timeout
-            # Pass timeout to LM Studio client so HTTP request has correct timeout
-            logger.debug(
-                "executing_inference",
+            # Execute via LM Studio using streaming
+            # Streaming keeps connection alive while tokens are generated,
+            # avoiding timeout issues with slow models
+            logger.info(
+                "executing_inference_stream",
                 subtask_id=payload.subtask_id,
                 timeout_seconds=payload.timeout_seconds
             )
-            response = await asyncio.wait_for(
-                self._lm_client.simple_completion(
-                    prompt,
-                    timeout=float(payload.timeout_seconds)
-                ),
-                timeout=payload.timeout_seconds + 10  # Extra buffer for network overhead
+
+            # Track token generation for metrics
+            tokens_generated = 0
+            def on_token(chunk: str, count: int):
+                nonlocal tokens_generated
+                tokens_generated = count
+
+            response = await self._lm_client.simple_completion_stream(
+                prompt,
+                timeout=float(payload.timeout_seconds),
+                on_token=on_token
+            )
+
+            logger.debug(
+                "inference_complete",
+                subtask_id=payload.subtask_id,
+                tokens_generated=tokens_generated
             )
 
             # Calculate execution time
             execution_time_ms = int((time.time() - start_time) * 1000)
 
-            # Update tokens/second metric (rough estimate: ~4 chars per token)
-            estimated_tokens = len(response) // 4
-            self._total_tokens += estimated_tokens
+            # Update tokens/second metric using actual token count from stream
+            # tokens_generated comes from the streaming callback
+            actual_tokens = tokens_generated if tokens_generated > 0 else len(response) // 4
+            self._total_tokens += actual_tokens
             self._total_time_ms += execution_time_ms
             if self._total_time_ms > 0:
                 self._tokens_per_second = (
@@ -370,6 +383,7 @@ class NodeAgent:
                 "task_completed",
                 subtask_id=payload.subtask_id,
                 execution_time_ms=execution_time_ms,
+                tokens_generated=actual_tokens,
                 tokens_per_second=round(self._tokens_per_second, 2)
             )
 

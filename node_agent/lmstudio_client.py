@@ -217,7 +217,8 @@ class LMStudioClient:
         messages: list[dict],
         model: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None
     ) -> AsyncGenerator[str, None]:
         """
         Stream a chat completion response.
@@ -227,10 +228,13 @@ class LMStudioClient:
             model: Model name (optional)
             temperature: Sampling temperature
             max_tokens: Maximum tokens
+            timeout: Request timeout in seconds
 
         Yields:
             Content chunks as they arrive
         """
+        import json as json_module
+
         if model is None:
             model = await self.get_loaded_model() or "local-model"
 
@@ -244,10 +248,27 @@ class LMStudioClient:
         if max_tokens:
             payload["max_tokens"] = max_tokens
 
+        # For streaming, use a longer read timeout since tokens come slowly
+        # but connection timeout should be quick
+        stream_timeout = httpx.Timeout(
+            connect=30.0,
+            read=timeout if timeout else MAX_GENERATION_TIMEOUT,
+            write=30.0,
+            pool=30.0
+        )
+
+        logger.debug(
+            "chat_completion_stream_request",
+            model=model,
+            messages_count=len(messages),
+            timeout=timeout
+        )
+
         async with self.client.stream(
             "POST",
             "/chat/completions",
-            json=payload
+            json=payload,
+            timeout=stream_timeout
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -255,12 +276,14 @@ class LMStudioClient:
                     data = line[6:]
                     if data == "[DONE]":
                         break
-                    import json
-                    chunk = json.loads(data)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content", "")
-                    if content:
-                        yield content
+                    try:
+                        chunk = json_module.loads(data)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                    except json_module.JSONDecodeError:
+                        continue
 
     async def simple_completion(
         self,
@@ -310,6 +333,76 @@ class LMStudioClient:
 
         message = choices[0].get("message", {})
         return message.get("content", "")
+
+    async def simple_completion_stream(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
+        on_token: Optional[callable] = None
+    ) -> str:
+        """
+        Simple completion using streaming - better for slow models.
+
+        Accumulates the streamed response and returns the full text.
+        Connection stays alive as long as tokens are being generated,
+        avoiding timeout issues with slow models.
+
+        Args:
+            prompt: User prompt
+            system_prompt: Optional system prompt
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens
+            timeout: Request timeout in seconds
+            on_token: Optional callback called for each token (for progress tracking)
+
+        Returns:
+            Generated text response (accumulated from stream)
+        """
+        messages = []
+
+        if system_prompt:
+            messages.append({
+                "role": "system",
+                "content": system_prompt
+            })
+
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
+
+        # Accumulate response from stream
+        response_parts = []
+        token_count = 0
+
+        async for chunk in self.chat_completion_stream(
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout
+        ):
+            response_parts.append(chunk)
+            token_count += 1
+
+            # Call progress callback if provided
+            if on_token:
+                try:
+                    on_token(chunk, token_count)
+                except Exception:
+                    pass  # Don't let callback errors break generation
+
+        response = "".join(response_parts)
+
+        logger.debug(
+            "stream_completion_finished",
+            tokens_received=token_count,
+            response_length=len(response)
+        )
+
+        return response
 
 
 class LMStudioError(Exception):
