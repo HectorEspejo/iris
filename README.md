@@ -1,274 +1,314 @@
-# Iris - Distributed AI Inference Network
+# Iris Network - Distributed AI Inference
 
-A distributed AI inference network where members pay a monthly fee for access, contribute compute nodes running LM Studio, and earn rewards based on reputation.
-
-## Architecture
+A distributed AI inference network where members contribute compute nodes running LM Studio and earn rewards based on reputation.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      COORDINATOR SERVER                         │
-│                                                                 │
-│  • API Gateway (REST endpoints for users)                       │
-│  • Node Registry (WebSocket connections)                        │
-│  • Task Orchestrator (divides & assigns work)                   │
-│  • Response Aggregator (combines results)                       │
-│  • Reputation System                                            │
-│  • Economics Module                                             │
+│         168.119.10.189:8000 • iris.network                      │
 └─────────────────────────────────────────────────────────────────┘
           │              │              │              │
           ▼              ▼              ▼              ▼
      ┌────────┐    ┌────────┐    ┌────────┐    ┌────────┐
      │ Node 1 │    │ Node 2 │    │ Node 3 │    │ Node N │
      │LM Studio    │LM Studio    │LM Studio    │LM Studio
-     │ + Agent │   │ + Agent │   │ + Agent │   │ + Agent │
      └────────┘    └────────┘    └────────┘    └────────┘
 ```
 
-## Features
+---
 
-- **Distributed Inference**: Tasks are divided and processed across multiple nodes
-- **E2E Encryption**: All communication uses X25519 + AES-256-GCM
-- **Reputation System**: Nodes earn reputation for reliable performance
-- **Economic Model**: Monthly pool distributed based on reputation
-- **Task Division Modes**:
-  - **Subtasks**: Divide complex tasks into independent parts
-  - **Consensus**: Same task to multiple nodes for verification
-  - **Context**: Split long documents across nodes
-- **Web Dashboard**: Real-time monitoring of network status
-
-## Quick Start
+## Quick Install (Run a Node)
 
 ### Prerequisites
 
-- Python 3.11+
-- Docker & Docker Compose
-- LM Studio (running with a loaded model)
+1. **LM Studio** - Download from [lmstudio.ai](https://lmstudio.ai)
+2. Load a model and start the local server (port 1234)
 
-### 1. Clone and Install
+### One-Line Installation
 
+**Linux / macOS:**
 ```bash
-cd clubai
-pip install -r requirements.txt
+curl -fsSL https://iris.network/install.sh | bash
 ```
 
-### 2. Start the Coordinator
+**Windows (PowerShell):**
+```powershell
+irm https://iris.network/install.ps1 | iex
+```
+
+The installer will:
+1. Detect your platform
+2. Check coordinator connectivity
+3. Verify LM Studio is running
+4. Create an account or sign in
+5. Generate an enrollment token automatically
+6. Download the node agent binary
+7. Configure and start your node
+
+### Manual Installation
+
+If you prefer manual setup:
 
 ```bash
-# Using Python directly
+# 1. Download the binary for your platform
+# Linux AMD64
+curl -fsSL https://github.com/iris-network/iris-node/releases/latest/download/iris-node-linux-amd64 -o iris-node
+# macOS ARM64 (Apple Silicon)
+curl -fsSL https://github.com/iris-network/iris-node/releases/latest/download/iris-node-darwin-arm64 -o iris-node
+# macOS Intel
+curl -fsSL https://github.com/iris-network/iris-node/releases/latest/download/iris-node-darwin-amd64 -o iris-node
+
+chmod +x iris-node
+
+# 2. Create config file
+cat > config.yaml << EOF
+node_id: "my-node-$(hostname)"
+coordinator_url: "ws://168.119.10.189:8000/nodes/connect"
+lmstudio_url: "http://localhost:1234/v1"
+enrollment_token: "YOUR_TOKEN_HERE"
+data_dir: "./data"
+EOF
+
+# 3. Run
+./iris-node --config config.yaml
+```
+
+### After Installation
+
+```bash
+# Check node status
+iris-node --help
+
+# View logs
+tail -f ~/.iris/logs/node.log
+
+# Service commands (Linux)
+sudo systemctl status iris-node
+sudo systemctl restart iris-node
+
+# Service commands (macOS)
+launchctl list | grep iris
+```
+
+---
+
+## For Developers
+
+### Local Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/iris-network/iris-node.git
+cd iris-node
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Start the coordinator (with hot reload)
 python -m uvicorn coordinator.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Or using Docker
-docker-compose up coordinator
-```
+# In another terminal, start LM Studio and load a model
 
-### 3. Start LM Studio
-
-1. Open LM Studio
-2. Load a model (e.g., Llama 3.2 3B)
-3. Start the local server on port 1234
-
-### 4. Start a Node Agent
-
-```bash
-# Set environment variables
-export NODE_ID="my-node-1"
+# Start a node agent
+export NODE_ID="dev-node-1"
 export COORDINATOR_URL="ws://localhost:8000/nodes/connect"
 export LMSTUDIO_URL="http://localhost:1234/v1"
-
-# Run the agent
 python -m node_agent.main
 ```
 
-### 5. Use the CLI
+### Docker Deployment
 
 ```bash
-# Register a new account
+# Start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f coordinator
+
+# Stop
+docker-compose down
+```
+
+### Build Standalone Binary
+
+```bash
+# Build for current platform
+./scripts/build-standalone.sh
+
+# Build for all platforms (requires Docker)
+./scripts/build-standalone.sh --all
+
+# Create release assets
+./scripts/build-standalone.sh --release
+```
+
+### CLI Client
+
+```bash
+# Register
 python -m client.cli register --email user@example.com --password mypassword
 
 # Login
 python -m client.cli login --email user@example.com --password mypassword
 
-# Send an inference request
-python -m client.cli ask "Analyze this text and extract: themes, characters, and conclusions"
+# Send inference request
+python -m client.cli ask "Analyze this text and summarize the main points"
 
-# Check network status
+# Check network
 python -m client.cli stats
 python -m client.cli nodes
 python -m client.cli reputation
 ```
 
-## Docker Deployment
-
-Start the full stack with Docker Compose:
+### Running Tests
 
 ```bash
-# Build and start all services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f coordinator
-docker-compose logs -f node1
-
-# Stop all services
-docker-compose down
+pytest tests/ -v
+pytest tests/ --cov=coordinator --cov=node_agent --cov=shared
 ```
 
-The coordinator will be available at http://localhost:8000
+---
 
 ## API Reference
 
 ### Authentication
-
-```
-POST /auth/register    - Register new user
-POST /auth/login       - Login, returns JWT
-GET  /auth/me          - Get current user info
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/register` | POST | Register new user |
+| `/auth/login` | POST | Login, returns JWT |
+| `/auth/me` | GET | Get current user |
 
 ### Inference
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/inference` | POST | Submit inference request |
+| `/inference/{task_id}` | GET | Get task status |
 
-```
-POST /inference            - Submit inference request
-GET  /inference/{task_id}  - Get task status
-```
+### Network
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Coordinator health check |
+| `/stats` | GET | Network statistics |
+| `/reputation` | GET | Node leaderboard |
+| `/nodes` | GET | Active nodes (auth required) |
+| `/dashboard` | GET | Web dashboard |
 
-### Network Info
+### Node Enrollment
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/nodes/validate-token` | POST | Validate enrollment token |
+| `/admin/tokens/generate` | POST | Generate new token (auth required) |
+| `/admin/tokens` | GET | List tokens (auth required) |
 
-```
-GET  /stats           - Network statistics
-GET  /reputation      - Node leaderboard
-GET  /nodes           - Active nodes (authenticated)
-GET  /history         - Task history (authenticated)
-```
-
-### Dashboard
-
-```
-GET  /dashboard       - Web dashboard (HTML)
-```
+---
 
 ## Configuration
 
-### Coordinator Environment Variables
+### Environment Variables
 
+**Coordinator:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite:///data/clubai.db` | Database path |
-| `JWT_SECRET` | `dev-secret-...` | JWT signing secret |
-| `COORDINATOR_PRIVATE_KEY_PATH` | `data/coordinator.key` | Key file path |
+| `DATABASE_URL` | `sqlite:///data/iris.db` | Database path |
+| `JWT_SECRET` | (generated) | JWT signing secret |
+| `NODE_TOKEN_SECRET` | (generated) | Token signing secret |
+| `COORDINATOR_WS_URL` | `ws://168.119.10.189:8000/nodes/connect` | WebSocket URL |
 
-### Node Agent Environment Variables
-
+**Node Agent:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NODE_ID` | `node-{pid}` | Unique node identifier |
-| `COORDINATOR_URL` | `ws://localhost:8000/nodes/connect` | Coordinator WebSocket URL |
-| `LMSTUDIO_URL` | `http://localhost:1234/v1` | LM Studio API URL |
-| `NODE_KEY_PATH` | `data/node.key` | Node private key path |
-| `NODE_VRAM_GB` | `8` | Available VRAM (GB) |
+| `NODE_ID` | `node-{hostname}` | Unique node identifier |
+| `COORDINATOR_URL` | `ws://168.119.10.189:8000/nodes/connect` | Coordinator URL |
+| `LMSTUDIO_URL` | `http://localhost:1234/v1` | LM Studio API |
+
+### Node Config File (config.yaml)
+
+```yaml
+node_id: "my-node-name"
+coordinator_url: "ws://168.119.10.189:8000/nodes/connect"
+lmstudio_url: "http://localhost:1234/v1"
+enrollment_token: "iris_v1.eyJ..."
+data_dir: "~/.iris/data"
+log_dir: "~/.iris/logs"
+```
+
+---
+
+## How It Works
+
+### Task Division Modes
+- **Subtasks**: Complex tasks divided into independent parts
+- **Consensus**: Same task sent to multiple nodes for verification
+- **Context**: Long documents split across nodes
+
+### Reputation System
+| Event | Points |
+|-------|--------|
+| Task completed | +10 |
+| Fast completion | +5 |
+| Task timeout | -20 |
+| Invalid response | -50 |
+| Uptime (per hour) | +1 |
+
+### Security
+- End-to-end encryption (X25519 + AES-256-GCM)
+- JWT authentication
+- Enrollment tokens for node registration
+
+---
 
 ## Project Structure
 
 ```
-clubai/
-├── coordinator/          # Central coordinator server
-│   ├── main.py          # FastAPI application
-│   ├── auth.py          # JWT authentication
-│   ├── database.py      # SQLite operations
-│   ├── node_registry.py # Node management
+iris-node/
+├── coordinator/           # Central server
+│   ├── main.py           # FastAPI app
+│   ├── node_registry.py  # Node management
+│   ├── node_tokens.py    # Enrollment tokens
 │   ├── task_orchestrator.py
-│   ├── response_aggregator.py
-│   ├── reputation.py
-│   ├── economics.py
-│   ├── crypto.py
-│   └── dashboard.py
+│   └── reputation.py
 │
-├── node_agent/          # Node agent
-│   ├── main.py          # Agent entry point
-│   ├── lmstudio_client.py
-│   ├── crypto.py
-│   └── heartbeat.py
+├── node_agent/           # Node agent
+│   ├── main.py           # Agent entry point
+│   ├── standalone_main.py # CLI entry point
+│   └── lmstudio_client.py
 │
-├── client/              # CLI and SDK
-│   ├── cli.py           # Typer CLI
-│   └── sdk.py           # Python SDK
+├── installer/            # Installation scripts
+│   ├── install.sh        # Linux/macOS
+│   └── install.ps1       # Windows
 │
-├── shared/              # Shared models and utilities
-│   ├── models.py        # Pydantic models
-│   ├── protocol.py      # WebSocket protocol
-│   └── crypto_utils.py  # Encryption utilities
+├── client/               # CLI client
+│   ├── cli.py
+│   └── sdk.py
 │
-├── tests/               # Test suite
-├── docker-compose.yml
-└── requirements.txt
+└── shared/               # Shared code
+    ├── models.py
+    ├── protocol.py
+    └── crypto_utils.py
 ```
 
-## Reputation System
+---
 
-Nodes earn/lose reputation based on performance:
+## Troubleshooting
 
-| Event | Points |
-|-------|--------|
-| Task completed | +10 |
-| Fast completion bonus | +5 |
-| Task timeout | -20 |
-| Invalid response | -50 |
-| Uptime (per hour) | +1 |
-| Broken availability promise | -5/hour |
-| Weekly decay | -1% |
+### Node won't connect
+1. Check LM Studio is running: `curl http://localhost:1234/v1/models`
+2. Check coordinator: `curl http://168.119.10.189:8000/health`
+3. Verify enrollment token is valid
 
-Minimum reputation: 10 points
-
-## Economic Model
-
-Monthly pool distribution:
-- Each node's share = (node_reputation / total_reputation) * pool
-- Distribution happens at end of month
-- Reputation snapshot taken at distribution time
-
-## Running Tests
-
+### Command not found after installation
 ```bash
-# Install test dependencies
-pip install pytest pytest-asyncio
+# macOS/Linux: Add to PATH
+source ~/.zshrc  # or ~/.bashrc
 
-# Run all tests
-pytest tests/
-
-# Run specific test file
-pytest tests/test_crypto.py -v
-
-# Run with coverage
-pytest tests/ --cov=coordinator --cov=node_agent --cov=shared
+# Or run directly
+~/.iris/bin/iris-node --help
 ```
 
-## Security
+### Token validation failed
+Tokens are single-use. Generate a new one via the installer or API.
 
-- All prompts and responses are encrypted end-to-end
-- X25519 for key exchange
-- AES-256-GCM for symmetric encryption
-- JWT tokens for user authentication
-- Passwords hashed with bcrypt
-
-## Roadmap
-
-### v1.0 (Current MVP)
-- [x] Central coordinator
-- [x] Node registration and heartbeat
-- [x] Task division (Mode 2 - Subtasks)
-- [x] E2E encryption
-- [x] Reputation system
-- [x] Basic economics
-- [x] CLI client
-- [x] Web dashboard
-
-### v2.0 (Future)
-- [ ] P2P node discovery
-- [ ] Multi-party computation for privacy
-- [ ] Consensus mode implementation
-- [ ] Context division mode
-- [ ] Payment integration
-- [ ] Mobile app
+---
 
 ## License
 
@@ -276,4 +316,4 @@ MIT License
 
 ## Contributing
 
-Contributions are welcome! Please read our contributing guidelines before submitting PRs.
+Contributions welcome! Please read contributing guidelines before submitting PRs.
