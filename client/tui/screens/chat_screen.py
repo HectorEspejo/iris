@@ -1,8 +1,13 @@
-"""Chat Screen."""
+"""
+Communications Screen - Brutalist Design.
+
+Interactive chat interface for sending inference requests
+with a terminal-style, cyberpunk aesthetic.
+"""
 
 from textual.app import ComposeResult
-from textual.widgets import Static, Button, Select, TextArea, RichLog
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.widgets import Static, Button, Select, TextArea
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual import work
 import httpx
 import asyncio
@@ -11,87 +16,6 @@ from pathlib import Path
 
 class ChatScreen(Container):
     """Interactive chat interface for sending inference requests."""
-
-    DEFAULT_CSS = """
-    ChatScreen {
-        layout: vertical;
-        padding: 1;
-    }
-
-    #messages-container {
-        height: 1fr;
-        border: solid $primary;
-        margin: 1;
-        padding: 1;
-        background: $surface-lighten-1;
-    }
-
-    .message {
-        margin-bottom: 1;
-        padding: 1;
-        border: solid $primary-darken-1;
-    }
-
-    .user-message {
-        background: $primary-darken-2;
-        border-left: thick $accent;
-    }
-
-    .assistant-message {
-        background: $surface-lighten-2;
-        border-left: thick $success;
-    }
-
-    .message-header {
-        color: $accent;
-        text-style: bold;
-    }
-
-    .message-content {
-        padding-top: 1;
-    }
-
-    .controls-row {
-        height: auto;
-        padding: 0 1;
-    }
-
-    #mode-select {
-        width: 20;
-    }
-
-    #difficulty-select {
-        width: 20;
-        margin-left: 1;
-    }
-
-    #prompt-input {
-        height: 5;
-        margin: 1;
-        border: solid $accent;
-    }
-
-    .button-row {
-        height: auto;
-        padding: 0 1;
-    }
-
-    #send-btn {
-        width: 15;
-    }
-
-    #status-label {
-        margin-left: 2;
-        padding: 1;
-        color: $text-muted;
-    }
-
-    .empty-chat {
-        text-align: center;
-        color: $text-muted;
-        padding: 5;
-    }
-    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -110,46 +34,50 @@ class ChatScreen(Container):
             pass
 
     def compose(self) -> ComposeResult:
-        """Create the chat layout."""
-        yield Static(" Iris Chat ", classes="section-title")
+        """Create the communications layout."""
+        yield Static(" COMMUNICATIONS ", classes="section-title")
 
-        # Messages area
+        # Messages area with brutalist container
         with VerticalScroll(id="messages-container"):
             yield Static(
-                "Send a message to start chatting with Iris Network.\n\n"
-                "Your prompts will be distributed across the network\n"
-                "and processed by available nodes.",
+                "[#444444]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/]\n\n"
+                "[#ff6a00]▌IRIS NETWORK COMMUNICATIONS TERMINAL▐[/]\n\n"
+                "[#888888]Send a message to initiate distributed inference.\n"
+                "Your prompts will be processed across the network.[/]\n\n"
+                "[#444444]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/]",
                 classes="empty-chat",
                 id="empty-state"
             )
 
-        # Controls
+        # Controls with brutalist styling
         with Horizontal(classes="controls-row"):
+            yield Static("[#ff6a00]MODE[/]", classes="control-label")
             yield Select(
-                [("subtasks", "Subtasks"), ("consensus", "Consensus"), ("context", "Context")],
+                [("SUBTASKS", "subtasks"), ("CONSENSUS", "consensus"), ("CONTEXT", "context")],
                 value="subtasks",
                 id="mode-select",
-                prompt="Mode"
+                prompt="MODE"
             )
+            yield Static("[#00ffff]DIFF[/]", classes="control-label")
             yield Select(
-                [("simple", "Simple"), ("complex", "Complex"), ("advanced", "Advanced")],
+                [("SIMPLE", "simple"), ("COMPLEX", "complex"), ("ADVANCED", "advanced")],
                 value="simple",
                 id="difficulty-select",
-                prompt="Difficulty"
+                prompt="DIFFICULTY"
             )
 
-        # Input
-        yield TextArea(placeholder="Enter your prompt here...", id="prompt-input")
+        # Input area
+        yield TextArea(placeholder="> Enter command...", id="prompt-input")
 
         # Send button and status
         with Horizontal(classes="button-row"):
-            yield Button("Send", id="send-btn", variant="primary")
-            yield Static("Ready", id="status-label")
+            yield Button("▶ TRANSMIT", id="send-btn", variant="primary")
+            yield Static("[#00ffff]● READY[/]", id="status-label")
 
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
+    def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button press."""
         if event.button.id == "send-btn":
-            await self._send_message()
+            self._send_message()
 
     @work(exclusive=True)
     async def _send_message(self) -> None:
@@ -159,12 +87,12 @@ class ChatScreen(Container):
         prompt = input_area.text.strip()
 
         if not prompt:
-            self._update_status("Please enter a prompt")
+            self._update_status("[#ffaa00]⚠ ENTER PROMPT[/]")
             return
 
         if not self._token:
-            self._update_status("Not logged in - run: python -m client.cli login")
-            self._add_system_message("You need to login first. Run: python -m client.cli login")
+            self._update_status("[#ff0000]◼ NOT AUTHENTICATED[/]")
+            self._add_system_message("Authentication required. Restarting TUI...")
             return
 
         # Get mode and difficulty
@@ -173,10 +101,10 @@ class ChatScreen(Container):
 
         # Clear input and update status
         input_area.clear()
-        self._update_status("Sending...")
+        self._update_status("[#ffaa00]◐ TRANSMITTING...[/]")
 
         # Add user message to chat
-        self._add_message("You", prompt, is_user=True)
+        self._add_message("USER", prompt, is_user=True)
 
         try:
             # Send request
@@ -195,36 +123,36 @@ class ChatScreen(Container):
                     data = response.json()
                     task_id = data.get("task_id")
 
-                    self._update_status(f"Processing... (Task: {task_id[:8]})")
+                    self._update_status(f"[#00ffff]◐ PROCESSING {task_id[:8]}[/]")
 
                     # Poll for result
                     result = await self._poll_for_result(client, task_id)
 
                     if result:
-                        self._add_message("Iris", result, is_user=False)
-                        self._update_status("Ready")
+                        self._add_message("IRIS", result, is_user=False)
+                        self._update_status("[#00ff41]▶ COMPLETE[/]")
                     else:
-                        self._add_message("Iris", "[Error: Task timed out or failed]", is_user=False)
-                        self._update_status("Task failed")
+                        self._add_message("IRIS", "[#ff0000]ERROR: Task timeout or failure[/]", is_user=False)
+                        self._update_status("[#ff0000]◼ FAILED[/]")
 
                 elif response.status_code == 401:
-                    self._update_status("Authentication failed")
-                    self._add_system_message("Session expired. Please login again.")
+                    self._update_status("[#ff0000]◼ AUTH EXPIRED[/]")
+                    self._add_system_message("Session expired. Restart TUI to re-authenticate.")
                 else:
                     error = response.json().get("detail", "Unknown error")
-                    self._update_status(f"Error: {error}")
+                    self._update_status(f"[#ff0000]◼ ERROR[/]")
                     self._add_system_message(f"Error: {error}")
 
         except httpx.TimeoutException:
-            self._update_status("Request timed out")
-            self._add_system_message("Request timed out. The network may be busy.")
+            self._update_status("[#ff0000]◼ TIMEOUT[/]")
+            self._add_system_message("Request timed out. Network may be busy.")
         except Exception as e:
-            self._update_status(f"Error: {str(e)[:30]}")
-            self._add_system_message(f"Error: {str(e)}")
+            self._update_status("[#ff0000]◼ ERROR[/]")
+            self._add_system_message(f"Error: {str(e)[:50]}")
 
     async def _poll_for_result(self, client: httpx.AsyncClient, task_id: str, max_attempts: int = 30) -> str:
         """Poll for task completion."""
-        for _ in range(max_attempts):
+        for attempt in range(max_attempts):
             try:
                 response = await client.get(
                     f"{self._coordinator_url}/inference/{task_id}",
@@ -240,6 +168,10 @@ class ChatScreen(Container):
                     elif status in ("failed", "partial"):
                         return None
 
+                    # Update status with progress indicator
+                    dots = "." * ((attempt % 3) + 1)
+                    self._update_status(f"[#00ffff]◐ PROCESSING{dots}[/]")
+
                 await asyncio.sleep(2)
 
             except Exception:
@@ -248,7 +180,7 @@ class ChatScreen(Container):
         return None
 
     def _add_message(self, sender: str, content: str, is_user: bool = False) -> None:
-        """Add a message to the chat."""
+        """Add a message to the chat with brutalist styling."""
         # Hide empty state
         try:
             empty = self.query_one("#empty-state", Static)
@@ -260,7 +192,12 @@ class ChatScreen(Container):
         container = self.query_one("#messages-container", VerticalScroll)
 
         css_class = "user-message" if is_user else "assistant-message"
-        header = f"[bold]{'You' if is_user else 'Iris'}[/bold]"
+
+        # Brutalist message format
+        if is_user:
+            header = f"[#ff6a00 bold]▌{sender}▐[/]"
+        else:
+            header = f"[#00ffff bold]▌{sender}▐[/]"
 
         message = Static(
             f"{header}\n{content}",
@@ -273,7 +210,7 @@ class ChatScreen(Container):
         self._messages.append({"sender": sender, "content": content, "is_user": is_user})
 
     def _add_system_message(self, content: str) -> None:
-        """Add a system message."""
+        """Add a system message with warning styling."""
         try:
             empty = self.query_one("#empty-state", Static)
             empty.display = False
@@ -283,7 +220,7 @@ class ChatScreen(Container):
         container = self.query_one("#messages-container", VerticalScroll)
 
         message = Static(
-            f"[dim italic]{content}[/]",
+            f"[#ffaa00]▌SYSTEM▐[/] [#888888]{content}[/]",
             classes="message"
         )
 

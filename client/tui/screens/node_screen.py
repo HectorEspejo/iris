@@ -1,7 +1,12 @@
-"""Node Status Screen."""
+"""
+System Status Screen - Brutalist Design.
+
+Displays local node status, performance metrics, and activity log
+with Evangelion-inspired indicators and heavy borders.
+"""
 
 from textual.app import ComposeResult
-from textual.widgets import Static, DataTable, RichLog, ProgressBar
+from textual.widgets import Static, RichLog, ProgressBar
 from textual.containers import Container, Horizontal, Vertical
 
 from ..widgets import StatsCard, StatusIndicator
@@ -10,103 +15,77 @@ from ..widgets import StatsCard, StatusIndicator
 class NodeScreen(Container):
     """Screen showing the local node status and metrics."""
 
-    DEFAULT_CSS = """
-    NodeScreen {
-        layout: vertical;
-        padding: 1;
-    }
-
-    .node-info-panel {
-        height: auto;
-        border: solid $primary;
-        padding: 1 2;
-        margin: 1;
-        background: $surface-lighten-1;
-    }
-
-    .info-row {
-        height: 1;
-    }
-
-    .info-label {
-        width: 18;
-        color: $text-muted;
-    }
-
-    .info-value {
-        width: 1fr;
-        text-style: bold;
-    }
-
-    .reputation-section {
-        height: auto;
-        padding: 1;
-        margin: 1;
-    }
-
-    .rep-bar-container {
-        height: 1;
-        margin: 0 1;
-    }
-
-    .rep-text {
-        text-align: center;
-        padding: 1;
-    }
-    """
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._node_config = {}
         self._reputation = []
 
     def compose(self) -> ComposeResult:
-        """Create the node status layout."""
-        yield Static(" Node Status ", classes="section-title")
+        """Create the system status layout."""
+        yield Static(" SYSTEM STATUS ", classes="section-title")
 
-        # Connection status and node info
+        # Connection status and node info panel
         with Container(classes="node-info-panel"):
             with Horizontal(classes="info-row"):
                 yield StatusIndicator(id="conn-status")
+                yield Static("", id="uptime-display", classes="info-value")
+
+            yield Static("━" * 60, classes="info-separator")
 
             with Horizontal(classes="info-row"):
-                yield Static("Node ID:", classes="info-label")
+                yield Static("NODE ID", classes="info-label")
                 yield Static("Not configured", id="node-id", classes="info-value")
 
             with Horizontal(classes="info-row"):
-                yield Static("Model:", classes="info-label")
+                yield Static("MODEL", classes="info-label")
                 yield Static("-", id="model-name", classes="info-value")
 
             with Horizontal(classes="info-row"):
-                yield Static("Coordinator:", classes="info-label")
+                yield Static("ENDPOINT", classes="info-label")
                 yield Static("-", id="coordinator-url", classes="info-value")
 
-            with Horizontal(classes="info-row"):
-                yield Static("LM Studio:", classes="info-label")
-                yield Static("-", id="lmstudio-url", classes="info-value")
-
-        yield Static(" Performance ", classes="section-title")
+        yield Static(" PERFORMANCE ", classes="section-title")
 
         with Horizontal(classes="stats-row"):
-            yield StatsCard("Load", "0/10", icon="[cyan]Load[/]", id="perf-load")
-            yield StatsCard("VRAM", "- GB", icon="[green]VRAM[/]", id="perf-vram")
-            yield StatsCard("Speed", "- t/s", icon="[blue]Speed[/]", id="perf-speed")
-            yield StatsCard("Tasks", "0", icon="[magenta]Tasks[/]", id="perf-tasks")
+            yield StatsCard(
+                "LOAD",
+                "0/10",
+                icon="[#ff6a00]◈[/]",
+                id="perf-load"
+            )
+            yield StatsCard(
+                "VRAM",
+                "- GB",
+                icon="[#00ffff]▣[/]",
+                id="perf-vram"
+            )
+            yield StatsCard(
+                "SPEED",
+                "- t/s",
+                icon="[#ff6a00]▸[/]",
+                id="perf-speed"
+            )
+            yield StatsCard(
+                "TASKS",
+                "0",
+                icon="[#00ffff]◆[/]",
+                id="perf-tasks"
+            )
 
-        yield Static(" Reputation ", classes="section-title")
+        yield Static(" REPUTATION ", classes="section-title")
 
         with Container(classes="reputation-section"):
-            yield Static("Reputation: - / 100", id="rep-text", classes="rep-text")
+            yield Static("REPUTATION: - / 100", id="rep-text", classes="rep-text")
             yield ProgressBar(total=100, show_eta=False, id="rep-bar")
-            yield Static("Rank: -", id="rank-text", classes="rep-text")
+            yield Static("RANK: -", id="rank-text", classes="rep-text")
 
-        yield Static(" Activity Log ", classes="section-title")
+        yield Static(" ACTIVITY LOG ", classes="section-title")
         yield RichLog(id="activity-log", max_lines=50, highlight=True, markup=True)
 
     def on_mount(self) -> None:
         """Initialize when mounted."""
         log = self.query_one("#activity-log", RichLog)
-        log.write("[dim]Waiting for node data...[/]")
+        log.write("[#444444]▶ Waiting for node data...[/]")
 
     def update_data(self, config: dict, reputation: list) -> None:
         """Update the screen with node data."""
@@ -128,12 +107,15 @@ class NodeScreen(Container):
 
             # Update info fields
             self._update_static("#node-id", config.get("node_id", "Unknown"))
-            self._update_static("#coordinator-url", config.get("coordinator_url", "-")[:40])
-            self._update_static("#lmstudio-url", config.get("lmstudio_url", "-"))
+
+            coord_url = config.get("coordinator_url", "-")
+            if len(coord_url) > 40:
+                coord_url = coord_url[:37] + "..."
+            self._update_static("#coordinator-url", coord_url)
 
             # Log the update
             log = self.query_one("#activity-log", RichLog)
-            log.write(f"[green]Node config loaded:[/] {config.get('node_id', 'Unknown')}")
+            log.write(f"[#00ff41]▶ Node config loaded:[/] {config.get('node_id', 'Unknown')}")
 
         except Exception:
             pass
@@ -159,9 +141,9 @@ class NodeScreen(Container):
                 tasks = node_rep.get("tasks_completed", 0)
                 model = node_rep.get("model_name", "-")
 
-                # Update reputation display
-                self._update_static("#rep-text", f"Reputation: {rep_value} / 100")
-                self._update_static("#rank-text", f"Rank: #{rank} of {len(reputation)}")
+                # Update reputation display with brutalist style
+                self._update_static("#rep-text", f"REPUTATION: {rep_value} / 100")
+                self._update_static("#rank-text", f"RANK: #{rank:02d} OF {len(reputation)}")
                 self._update_static("#model-name", model)
 
                 # Update progress bar
@@ -177,6 +159,10 @@ class NodeScreen(Container):
                     card.update_value(str(tasks))
                 except Exception:
                     pass
+
+                # Log reputation update
+                log = self.query_one("#activity-log", RichLog)
+                log.write(f"[#00ffff]▶ Reputation sync:[/] {rep_value}/100 (Rank #{rank})")
 
         except Exception:
             pass
@@ -196,7 +182,22 @@ class NodeScreen(Container):
             status.set_state("disconnected")
 
             log = self.query_one("#activity-log", RichLog)
-            log.write("[yellow]No node configuration found.[/]")
-            log.write("[dim]Run with --config to specify a config file.[/]")
+            log.write("[#ffaa00]⚠ No node configuration found.[/]")
+            log.write("[#444444]▶ Run with --config to specify a config file.[/]")
+        except Exception:
+            pass
+
+    def log_activity(self, message: str, level: str = "info") -> None:
+        """Add an entry to the activity log."""
+        try:
+            log = self.query_one("#activity-log", RichLog)
+            colors = {
+                "info": "#00ffff",
+                "success": "#00ff41",
+                "warning": "#ffaa00",
+                "error": "#ff0000"
+            }
+            color = colors.get(level, "#888888")
+            log.write(f"[{color}]▶[/] {message}")
         except Exception:
             pass

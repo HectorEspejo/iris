@@ -153,6 +153,103 @@ check_coordinator() {
 }
 
 # =============================================================================
+# Node.js Check
+# =============================================================================
+
+check_nodejs() {
+    print_step "Verificando Node.js..."
+
+    if command_exists node; then
+        local node_version=$(node --version 2>/dev/null)
+        local major_version=$(echo "$node_version" | sed 's/v//' | cut -d. -f1)
+
+        if [ "$major_version" -ge 16 ]; then
+            print_success "Node.js $node_version detectado"
+            NODEJS_AVAILABLE=true
+            return 0
+        else
+            print_warning "Node.js $node_version es muy antiguo (se requiere v16+)"
+        fi
+    fi
+
+    print_warning "Node.js no detectado"
+    echo ""
+    echo -e "  ${YELLOW}Node.js es necesario para el dashboard (TUI).${NC}"
+    echo -e "  ${CYAN}Opciones de instalación:${NC}"
+    echo ""
+    echo -e "  ${BOLD}macOS:${NC}"
+    echo -e "    brew install node"
+    echo ""
+    echo -e "  ${BOLD}Linux (Ubuntu/Debian):${NC}"
+    echo -e "    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -"
+    echo -e "    sudo apt-get install -y nodejs"
+    echo ""
+    echo -e "  ${BOLD}Linux (otras distros):${NC}"
+    echo -e "    https://nodejs.org/en/download/"
+    echo ""
+
+    read -p "  ¿Intentar instalar Node.js automáticamente? [S/n]: " install_node
+    if [[ ! "$install_node" =~ ^[Nn]$ ]]; then
+        install_nodejs
+    else
+        print_warning "TUI no estará disponible sin Node.js"
+        NODEJS_AVAILABLE=false
+    fi
+}
+
+install_nodejs() {
+    print_info "Instalando Node.js..."
+
+    if [ "$OS" = "darwin" ]; then
+        # macOS - use Homebrew
+        if command_exists brew; then
+            brew install node
+            if command_exists node; then
+                print_success "Node.js instalado via Homebrew"
+                NODEJS_AVAILABLE=true
+                return 0
+            fi
+        else
+            print_warning "Homebrew no encontrado. Instala Node.js manualmente."
+            NODEJS_AVAILABLE=false
+            return 1
+        fi
+    elif [ "$OS" = "linux" ]; then
+        # Linux - use NodeSource
+        if command_exists apt-get; then
+            print_info "Instalando via NodeSource (requiere sudo)..."
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null
+            sudo apt-get install -y nodejs 2>/dev/null
+            if command_exists node; then
+                print_success "Node.js instalado via apt"
+                NODEJS_AVAILABLE=true
+                return 0
+            fi
+        elif command_exists dnf; then
+            sudo dnf install -y nodejs 2>/dev/null
+            if command_exists node; then
+                print_success "Node.js instalado via dnf"
+                NODEJS_AVAILABLE=true
+                return 0
+            fi
+        elif command_exists yum; then
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - 2>/dev/null
+            sudo yum install -y nodejs 2>/dev/null
+            if command_exists node; then
+                print_success "Node.js instalado via yum"
+                NODEJS_AVAILABLE=true
+                return 0
+            fi
+        fi
+    fi
+
+    print_error "No se pudo instalar Node.js automáticamente"
+    print_info "Instala manualmente desde https://nodejs.org"
+    NODEJS_AVAILABLE=false
+    return 1
+}
+
+# =============================================================================
 # LM Studio Check
 # =============================================================================
 
@@ -277,7 +374,12 @@ do_login() {
 
     if echo "$response" | grep -q '"access_token"'; then
         AUTH_TOKEN=$(echo "$response" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+
+        # Save token and credentials for TUI/CLI use
+        mkdir -p "$INSTALL_DIR"
+        echo "$AUTH_TOKEN" > "$INSTALL_DIR/token"
         print_success "Sesión iniciada correctamente"
+        print_success "Token guardado en $INSTALL_DIR/token"
     else
         local error=$(echo "$response" | grep -o '"detail":"[^"]*"' | cut -d'"' -f4)
         print_error "Error al iniciar sesión: ${error:-Credenciales inválidas}"
@@ -379,9 +481,9 @@ create_python_wrapper() {
     # Install dependencies using the found Python
     print_info "Instalando dependencias de Python..."
     $PYTHON_BIN -m pip install --quiet --upgrade pip 2>/dev/null || true
-    $PYTHON_BIN -m pip install --quiet pyyaml httpx websockets structlog cryptography pydantic 2>/dev/null || true
+    $PYTHON_BIN -m pip install --quiet pyyaml httpx websockets structlog cryptography pydantic typer rich 2>/dev/null || true
 
-    # Create wrapper script with explicit Python path
+    # Create iris-node wrapper script
     cat > "$INSTALL_DIR/bin/$BIN_NAME" << WRAPPER_EOF
 #!${PYTHON_PATH}
 """Iris Node Agent Wrapper"""
@@ -406,7 +508,102 @@ except ImportError as e:
 WRAPPER_EOF
 
     chmod +x "$INSTALL_DIR/bin/$BIN_NAME"
-    print_success "Wrapper script creado en $INSTALL_DIR/bin/$BIN_NAME"
+    print_success "iris-node instalado en $INSTALL_DIR/bin/$BIN_NAME"
+}
+
+# =============================================================================
+# Node.js TUI Installation
+# =============================================================================
+
+install_nodejs_tui() {
+    print_step "Instalando dashboard (TUI)..."
+
+    if [ "$NODEJS_AVAILABLE" != true ]; then
+        print_warning "Node.js no disponible, saltando instalación de TUI"
+        return 1
+    fi
+
+    TUI_DIR="$INSTALL_DIR/tui"
+    mkdir -p "$TUI_DIR"
+
+    # Check if source exists locally
+    TUI_SOURCE="$HOME/Documents/clubai/client/tui-node"
+
+    if [ -d "$TUI_SOURCE" ]; then
+        print_info "Copiando TUI desde fuente local..."
+        cp -r "$TUI_SOURCE/src" "$TUI_DIR/"
+        cp "$TUI_SOURCE/package.json" "$TUI_DIR/"
+    else
+        print_info "Descargando TUI desde servidor..."
+        # Download from coordinator (fallback)
+        if ! curl -fsSL "${COORDINATOR_URL}/downloads/tui-node.tar.gz" -o "/tmp/tui-node.tar.gz" 2>/dev/null; then
+            print_warning "No se pudo descargar TUI"
+            print_info "Clona el repositorio: git clone https://github.com/iris-network/client ~/Documents/clubai"
+            return 1
+        fi
+        tar -xzf "/tmp/tui-node.tar.gz" -C "$TUI_DIR"
+        rm -f "/tmp/tui-node.tar.gz"
+    fi
+
+    # Install npm dependencies
+    print_info "Instalando dependencias de Node.js..."
+    cd "$TUI_DIR"
+    npm install --quiet 2>/dev/null
+
+    if [ $? -ne 0 ]; then
+        print_warning "Error instalando dependencias npm"
+        return 1
+    fi
+
+    print_success "Dependencias de TUI instaladas"
+
+    # Create iris wrapper script (Node.js TUI)
+    cat > "$INSTALL_DIR/bin/iris" << 'WRAPPER_EOF'
+#!/bin/bash
+# Iris Network - Dashboard & CLI Launcher
+
+IRIS_DIR="$HOME/.iris"
+TUI_DIR="$IRIS_DIR/tui"
+
+# Check for TUI mode (no args or 'tui' arg)
+if [ $# -eq 0 ] || [ "$1" = "tui" ]; then
+    # Launch Node.js TUI
+    if [ -d "$TUI_DIR" ] && command -v node >/dev/null 2>&1; then
+        exec node "$TUI_DIR/src/index.js"
+    else
+        echo "Error: TUI not installed or Node.js not available"
+        echo "Run the installer again to set up the TUI"
+        exit 1
+    fi
+else
+    # Pass to Python CLI
+    PYTHON_BIN=""
+    if [ -f "$HOME/miniconda3/bin/python3" ]; then
+        PYTHON_BIN="$HOME/miniconda3/bin/python3"
+    elif [ -f "$HOME/anaconda3/bin/python3" ]; then
+        PYTHON_BIN="$HOME/anaconda3/bin/python3"
+    elif [ -f "/opt/homebrew/bin/python3" ]; then
+        PYTHON_BIN="/opt/homebrew/bin/python3"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="python"
+    else
+        echo "Error: Python not found"
+        exit 1
+    fi
+
+    PROJECT_ROOT="$HOME/Documents/clubai"
+    if [ -d "$PROJECT_ROOT" ]; then
+        export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
+    fi
+
+    exec $PYTHON_BIN -m client.cli "$@"
+fi
+WRAPPER_EOF
+
+    chmod +x "$INSTALL_DIR/bin/iris"
+    print_success "iris (TUI/CLI) instalado en $INSTALL_DIR/bin/iris"
 }
 
 # =============================================================================
@@ -540,17 +737,19 @@ EOF
 setup_path() {
     print_step "Configurando PATH..."
 
-    # Try to create symlink in /usr/local/bin
+    # Try to create symlinks in /usr/local/bin
     if [ -d "/usr/local/bin" ]; then
         if [ -w "/usr/local/bin" ]; then
             ln -sf "$INSTALL_DIR/bin/$BIN_NAME" "/usr/local/bin/$BIN_NAME"
-            print_success "Symlink creado: /usr/local/bin/$BIN_NAME"
+            ln -sf "$INSTALL_DIR/bin/iris" "/usr/local/bin/iris"
+            print_success "Symlinks creados en /usr/local/bin"
             PATH_CONFIGURED=true
             return
         elif command_exists sudo; then
-            print_info "Se requiere sudo para crear symlink en /usr/local/bin"
-            if sudo ln -sf "$INSTALL_DIR/bin/$BIN_NAME" "/usr/local/bin/$BIN_NAME" 2>/dev/null; then
-                print_success "Symlink creado: /usr/local/bin/$BIN_NAME"
+            print_info "Se requiere sudo para crear symlinks en /usr/local/bin"
+            if sudo ln -sf "$INSTALL_DIR/bin/$BIN_NAME" "/usr/local/bin/$BIN_NAME" 2>/dev/null && \
+               sudo ln -sf "$INSTALL_DIR/bin/iris" "/usr/local/bin/iris" 2>/dev/null; then
+                print_success "Symlinks creados en /usr/local/bin"
                 PATH_CONFIGURED=true
                 return
             fi
@@ -605,31 +804,37 @@ print_completion() {
     echo -e "  ${BOLD}Tu nodo está configurado:${NC}"
     echo -e "    Node ID:     ${CYAN}$NODE_ID${NC}"
     echo -e "    Directorio:  ${CYAN}$INSTALL_DIR${NC}"
-    echo -e "    Config:      ${CYAN}$INSTALL_DIR/config.yaml${NC}"
     echo ""
-    echo -e "  ${BOLD}Comandos útiles:${NC}"
-
-    if [ "$PYTHON_MODE" = true ]; then
-        echo -e "    ${CYAN}Iniciar:${NC}    cd $(dirname $INSTALL_DIR) && python -m node_agent.standalone_main --config $INSTALL_DIR/config.yaml"
-    elif [ "$PATH_CONFIGURED" = true ]; then
-        echo -e "    ${CYAN}Iniciar:${NC}    iris-node --config $INSTALL_DIR/config.yaml"
-        echo -e "    ${CYAN}Ayuda:${NC}      iris-node --help"
-    else
-        echo -e "    ${CYAN}Iniciar:${NC}    $INSTALL_DIR/bin/$BIN_NAME --config $INSTALL_DIR/config.yaml"
-    fi
-
-    echo -e "    ${CYAN}Ver logs:${NC}   tail -f $INSTALL_DIR/logs/node.log"
+    echo -e "  ${BOLD}Comandos disponibles:${NC}"
+    echo -e "    ${CYAN}iris${NC}           Abrir dashboard interactivo (TUI)"
+    echo -e "    ${CYAN}iris-node${NC}      Iniciar el nodo"
+    echo ""
+    echo -e "  ${BOLD}Otros comandos:${NC}"
+    echo -e "    ${CYAN}iris stats${NC}     Ver estadísticas de la red"
+    echo -e "    ${CYAN}iris nodes${NC}     Ver nodos activos"
+    echo -e "    ${CYAN}iris ask${NC}       Enviar prompt de inferencia"
+    echo -e "    ${CYAN}iris --help${NC}    Ver todos los comandos"
+    echo ""
 
     if [ "$OS" = "linux" ]; then
+        echo -e "  ${BOLD}Control del servicio:${NC}"
         echo -e "    ${CYAN}Estado:${NC}     systemctl status iris-node"
         echo -e "    ${CYAN}Reiniciar:${NC}  sudo systemctl restart iris-node"
         echo -e "    ${CYAN}Detener:${NC}    sudo systemctl stop iris-node"
+        echo ""
     elif [ "$OS" = "darwin" ]; then
+        echo -e "  ${BOLD}Control del servicio:${NC}"
         echo -e "    ${CYAN}Estado:${NC}     launchctl list | grep iris"
         echo -e "    ${CYAN}Detener:${NC}    launchctl unload ~/Library/LaunchAgents/network.iris.node.plist"
+        echo ""
     fi
 
-    echo ""
+    # Remind about new terminal if PATH was added to shell config
+    if [ "$PATH_CONFIGURED" != true ]; then
+        echo -e "  ${YELLOW}Nota: Abre una nueva terminal para usar los comandos${NC}"
+        echo ""
+    fi
+
     echo -e "  ${GREEN}¡Tu nodo ahora es parte de Iris Network!${NC}"
     echo ""
 }
@@ -686,16 +891,18 @@ uninstall_node() {
         fi
     fi
 
-    # Remove symlink from /usr/local/bin
-    if [ -L "/usr/local/bin/$BIN_NAME" ]; then
-        print_info "Eliminando symlink..."
-        if [ -w "/usr/local/bin" ]; then
-            rm -f "/usr/local/bin/$BIN_NAME"
-        else
-            sudo rm -f "/usr/local/bin/$BIN_NAME" 2>/dev/null || true
+    # Remove symlinks from /usr/local/bin
+    for cmd in "$BIN_NAME" "iris"; do
+        if [ -L "/usr/local/bin/$cmd" ]; then
+            print_info "Eliminando symlink $cmd..."
+            if [ -w "/usr/local/bin" ]; then
+                rm -f "/usr/local/bin/$cmd"
+            else
+                sudo rm -f "/usr/local/bin/$cmd" 2>/dev/null || true
+            fi
         fi
-        print_success "Symlink eliminado"
-    fi
+    done
+    print_success "Symlinks eliminados"
 
     # Remove PATH from shell config
     for config_file in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
@@ -789,10 +996,13 @@ main() {
     # Step 2: Check coordinator
     check_coordinator
 
-    # Step 3: Check LM Studio
+    # Step 3: Check Node.js (for TUI)
+    check_nodejs
+
+    # Step 4: Check LM Studio
     check_lmstudio
 
-    # Step 4: Authentication (if no token provided)
+    # Step 5: Authentication (if no token provided)
     if [ -z "$ENROLLMENT_TOKEN" ]; then
         authenticate_user
         generate_enrollment_token
@@ -801,16 +1011,19 @@ main() {
         print_success "Token: ${ENROLLMENT_TOKEN:0:20}..."
     fi
 
-    # Step 5: Download binary
+    # Step 6: Download binary
     download_binary
 
-    # Step 6: Setup PATH (always, regardless of mode)
+    # Step 7: Setup PATH (always, regardless of mode)
     setup_path
 
-    # Step 7: Configure
+    # Step 8: Install Node.js TUI
+    install_nodejs_tui
+
+    # Step 9: Configure
     configure_node
 
-    # Step 8: Service installation
+    # Step 10: Service installation
     if [ "$SKIP_SERVICE" != true ]; then
         ask_autostart
         if [ "$ENABLE_AUTOSTART" = true ]; then

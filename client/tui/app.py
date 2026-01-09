@@ -1,5 +1,10 @@
 """
 Iris Network TUI - Main Application
+
+Futuristic Brutalist Interface inspired by:
+- Blade Runner
+- Neon Genesis Evangelion
+- Cyberpunk aesthetics
 """
 
 from textual.app import App, ComposeResult
@@ -12,22 +17,23 @@ import yaml
 from pathlib import Path
 
 from .screens import NodeScreen, NetworkScreen, ChatScreen
+from .auth import AutoAuth
 
 
 class IrisTUI(App):
-    """Iris Network Terminal User Interface."""
+    """Iris Network Terminal User Interface - Brutalist Edition."""
 
     CSS_PATH = "styles.tcss"
-    TITLE = "Iris Network"
-    SUB_TITLE = "Distributed AI Inference"
+    TITLE = "IRIS NETWORK"
+    SUB_TITLE = "DISTRIBUTED INFERENCE SYSTEM"
 
     BINDINGS = [
-        Binding("1", "show_tab('tab-node')", "Node", show=True),
-        Binding("2", "show_tab('tab-network')", "Network", show=True),
-        Binding("3", "show_tab('tab-chat')", "Chat", show=True),
-        Binding("r", "refresh", "Refresh", show=True),
-        Binding("q", "quit", "Quit", show=True),
-        Binding("?", "help", "Help", show=False),
+        Binding("1", "show_tab('tab-network')", "NET", show=True),
+        Binding("2", "show_tab('tab-node')", "SYS", show=True),
+        Binding("3", "show_tab('tab-chat')", "COM", show=True),
+        Binding("r", "refresh", "SYNC", show=True),
+        Binding("q", "quit", "EXIT", show=True),
+        Binding("?", "help", "HELP", show=False),
     ]
 
     def __init__(
@@ -42,39 +48,59 @@ class IrisTUI(App):
         self.stats = {}
         self.nodes = []
         self.reputation = []
+        self.auth = AutoAuth(coordinator_url)
+        self._authenticated = False
 
-        # Load node config if provided
-        if config_path:
-            self._load_config(config_path)
+        # Load node config
+        self._load_config(config_path)
 
-    def _load_config(self, config_path: str):
+    def _load_config(self, config_path: str = None):
         """Load node configuration from YAML file."""
-        try:
-            path = Path(config_path).expanduser()
-            if path.exists():
-                with open(path) as f:
-                    self.node_config = yaml.safe_load(f) or {}
-        except Exception as e:
-            self.log.error(f"Failed to load config: {e}")
+        # Try provided path first, then default
+        paths_to_try = []
+        if config_path:
+            paths_to_try.append(Path(config_path).expanduser())
+        paths_to_try.append(Path.home() / ".iris" / "config.yaml")
+
+        for path in paths_to_try:
+            try:
+                if path.exists():
+                    with open(path) as f:
+                        self.node_config = yaml.safe_load(f) or {}
+                        break
+            except Exception:
+                pass
 
     def compose(self) -> ComposeResult:
         """Create the TUI layout."""
         yield Header()
         with TabbedContent(initial="tab-network"):
-            with TabPane("Network", id="tab-network"):
+            with TabPane("NET", id="tab-network"):
                 yield NetworkScreen(id="network-screen")
-            with TabPane("Node", id="tab-node"):
+            with TabPane("SYS", id="tab-node"):
                 yield NodeScreen(id="node-screen")
-            with TabPane("Chat", id="tab-chat"):
+            with TabPane("COM", id="tab-chat"):
                 yield ChatScreen(id="chat-screen")
         yield Footer()
 
-    async def on_mount(self) -> None:
+    def on_mount(self) -> None:
         """Called when app is mounted."""
+        # Start authentication
+        self._authenticate()
         # Start auto-refresh
         self.set_interval(5, self.action_refresh)
         # Initial data fetch
-        await self.action_refresh()
+        self.action_refresh()
+
+    @work(exclusive=True)
+    async def _authenticate(self) -> None:
+        """Perform automatic authentication."""
+        success, message = await self.auth.ensure_authenticated()
+        self._authenticated = success
+        if success:
+            self.notify(f"[#00ff41]AUTHENTICATED[/]", title="AUTH")
+        else:
+            self.notify(f"[#ff0000]AUTH FAILED: {message}[/]", title="AUTH")
 
     def action_show_tab(self, tab_id: str) -> None:
         """Switch to a specific tab."""
@@ -84,11 +110,18 @@ class IrisTUI(App):
     @work(exclusive=True)
     async def action_refresh(self) -> None:
         """Refresh all data from coordinator."""
+        headers = {}
+        if self.auth.token:
+            headers["Authorization"] = f"Bearer {self.auth.token}"
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # Fetch stats
                 try:
-                    response = await client.get(f"{self.coordinator_url}/stats")
+                    response = await client.get(
+                        f"{self.coordinator_url}/stats",
+                        headers=headers
+                    )
                     if response.status_code == 200:
                         self.stats = response.json()
                 except Exception:
@@ -96,15 +129,21 @@ class IrisTUI(App):
 
                 # Fetch reputation/leaderboard
                 try:
-                    response = await client.get(f"{self.coordinator_url}/reputation")
+                    response = await client.get(
+                        f"{self.coordinator_url}/reputation",
+                        headers=headers
+                    )
                     if response.status_code == 200:
                         self.reputation = response.json()
                 except Exception:
                     pass
 
-                # Fetch nodes (may require auth)
+                # Fetch nodes (requires auth)
                 try:
-                    response = await client.get(f"{self.coordinator_url}/nodes")
+                    response = await client.get(
+                        f"{self.coordinator_url}/nodes",
+                        headers=headers
+                    )
                     if response.status_code == 200:
                         self.nodes = response.json()
                 except Exception:
@@ -133,8 +172,9 @@ class IrisTUI(App):
             pass
 
     def action_help(self) -> None:
-        """Show help."""
+        """Show help notification."""
         self.notify(
-            "Keys: [1] Node [2] Network [3] Chat [R] Refresh [Q] Quit",
-            title="Help"
+            "[#ff6a00]1[/] NET  [#ff6a00]2[/] SYS  [#ff6a00]3[/] COM  "
+            "[#ff6a00]R[/] SYNC  [#ff6a00]Q[/] EXIT",
+            title="COMMANDS"
         )

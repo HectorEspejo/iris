@@ -1,288 +1,589 @@
-/* Iris Network TUI Styles */
+/*
+ * IRIS NETWORK TUI - Futuristic Brutalist Theme
+ * Inspired by: Blade Runner, Neon Genesis Evangelion, Cyberpunk
+ */
+
+/* ============================================================================
+ * COLOR VARIABLES (using direct hex since Textual supports them)
+ * ============================================================================ */
+
+/* Base backgrounds */
+$bg-primary: #0a0a0a;
+$bg-secondary: #111111;
+$bg-tertiary: #1a1a1a;
+$bg-panel: #0f0f0f;
+
+/* Accent colors */
+$accent-amber: #ff6a00;
+$accent-cyan: #00ffff;
+$accent-magenta: #ff0055;
+
+/* Text colors */
+$text-primary: #ffffff;
+$text-secondary: #888888;
+$text-muted: #444444;
+
+/* Status colors */
+$success: #00ff41;
+$error: #ff0000;
+$warning: #ffaa00;
+
+/* Tier colors */
+$tier-premium: #ff6a00;
+$tier-standard: #00ffff;
+$tier-basic: #666666;
+
+/* ============================================================================
+ * BASE SCREEN
+ * ============================================================================ */
 
 Screen {
-    background: $surface;
+    background: #0a0a0a;
+    color: #ffffff;
 }
 
-/* Header */
+/* ============================================================================
+ * HEADER - Brutalist Style
+ * ============================================================================ */
+
 Header {
-    dock: top;
-    height: 3;
-    background: $primary;
-}
-
-/* Footer */
-Footer {
-    dock: bottom;
-    height: 1;
-    background: $primary-darken-2;
-}
-
-/* Section titles */
-.section-title {
+    background: #111111;
+    color: #ff6a00;
     text-style: bold;
-    color: $accent;
-    padding: 1 1;
-    text-align: center;
-    background: $surface-darken-1;
-    margin-bottom: 1;
+    height: 3;
+    dock: top;
+    border-bottom: heavy #ff6a00;
 }
 
-/* Stats row */
+/* ============================================================================
+ * FOOTER
+ * ============================================================================ */
+
+Footer {
+    background: #111111;
+    color: #888888;
+    height: 1;
+    dock: bottom;
+    border-top: heavy #ff6a00;
+}
+
+FooterKey {
+    background: #1a1a1a;
+    color: #00ffff;
+    text-style: bold;
+}
+
+FooterKey:hover {
+    background: #ff6a00;
+    color: #0a0a0a;
+}
+
+/* ============================================================================
+ * TABS - Brutalist Navigation
+ * ============================================================================ */
+
+TabbedContent {
+    background: #0a0a0a;
+}
+
+Tabs {
+    background: #111111;
+    border-bottom: heavy #ff6a00;
+    height: 3;
+}
+
+Tab {
+    background: #1a1a1a;
+    color: #888888;
+    text-style: bold;
+    padding: 0 3;
+    border: none;
+}
+
+Tab:hover {
+    background: #0f0f0f;
+    color: #00ffff;
+}
+
+Tab.-active {
+    background: #0a0a0a;
+    color: #ff6a00;
+    text-style: bold;
+    border-top: heavy #ff6a00;
+    border-left: heavy #ff6a00;
+    border-right: heavy #ff6a00;
+}
+
+TabPane {
+    background: #0a0a0a;
+    padding: 1;
+}
+
+/* ============================================================================
+ * SECTION TITLES - Evangelion Style
+ * ============================================================================ */
+
+.section-title {
+    background: #111111;
+    color: #ff6a00;
+    text-style: bold;
+    text-align: center;
+    padding: 0 2;
+    margin: 1 0;
+    border: heavy #ff6a00;
+    height: 3;
+    content-align: center middle;
+}
+
+/* ============================================================================
+ * PANELS & CONTAINERS - Heavy Borders
+ * ============================================================================ */
+
+.panel {
+    background: #0f0f0f;
+    border: heavy #00ffff;
+    padding: 1 2;
+    margin: 1;
+}
+
+.panel-amber {
+    background: #0f0f0f;
+    border: heavy #ff6a00;
+    padding: 1 2;
+    margin: 1;
+}
+
+.info-panel {
+    background: #1a1a1a;
+    border: heavy #00ffff;
+    padding: 1 2;
+    margin: 1;
+    height: auto;
+}
+
+/* ============================================================================
+ * STATS ROW
+ * ============================================================================ */
+
 .stats-row {
     height: auto;
     margin: 1 0;
     padding: 0 1;
 }
 
-/* Stats card */
+/* ============================================================================
+ * STATS CARD - Brutalist Design
+ * ============================================================================ */
+
 StatsCard {
     width: 1fr;
     height: 7;
-    border: solid $primary;
-    padding: 1 2;
+    background: #1a1a1a;
+    border: heavy #00ffff;
+    padding: 1;
     margin: 0 1;
-    background: $surface-lighten-1;
 }
 
-StatsCard .card-icon {
-    text-align: center;
-    color: $accent;
+StatsCard:hover {
+    border: heavy #ff6a00;
 }
 
-StatsCard .card-value {
+.card-icon {
     text-align: center;
+    color: #ff6a00;
     text-style: bold;
-    color: $text;
-    padding: 1 0;
+    height: 1;
 }
 
-StatsCard .card-label {
+.card-value {
     text-align: center;
-    color: $text-muted;
+    color: #ffffff;
+    text-style: bold;
+    height: 2;
+    content-align: center middle;
 }
 
-/* Status indicator */
+.card-label {
+    text-align: center;
+    color: #444444;
+    text-style: bold;
+    height: 1;
+}
+
+/* ============================================================================
+ * STATUS INDICATOR - Evangelion Warning Style
+ * ============================================================================ */
+
 StatusIndicator {
     width: auto;
     height: 1;
-    padding: 0 1;
-}
-
-StatusIndicator.connected {
-    color: $success;
-}
-
-StatusIndicator.disconnected {
-    color: $error;
-}
-
-StatusIndicator.connecting {
-    color: $warning;
-}
-
-/* Node info panel */
-.node-info-panel {
-    height: auto;
-    border: solid $primary;
-    padding: 1 2;
-    margin: 1;
-    background: $surface-lighten-1;
-}
-
-.node-info-row {
-    height: 1;
-    padding: 0 1;
-}
-
-.node-info-label {
-    width: 15;
-    color: $text-muted;
-}
-
-.node-info-value {
-    color: $text;
+    padding: 0 2;
     text-style: bold;
 }
 
-/* Data tables */
+StatusIndicator.connected {
+    color: #00ff41;
+}
+
+StatusIndicator.disconnected {
+    color: #ff0000;
+}
+
+StatusIndicator.connecting {
+    color: #ffaa00;
+}
+
+/* ============================================================================
+ * DATA TABLES - Terminal Style
+ * ============================================================================ */
+
 DataTable {
+    background: #1a1a1a;
+    border: heavy #00ffff;
+    margin: 1;
     height: auto;
     max-height: 15;
-    margin: 1;
-    border: solid $primary;
 }
 
 DataTable > .datatable--header {
-    background: $primary;
-    color: $text;
+    background: #111111;
+    color: #ff6a00;
     text-style: bold;
 }
 
 DataTable > .datatable--cursor {
-    background: $accent;
+    background: #ff6a00;
+    color: #0a0a0a;
 }
 
-/* Tier colors */
-.tier-premium {
-    color: #ffd700;
-    text-style: bold;
+DataTable > .datatable--hover {
+    background: #0f0f0f;
 }
 
-.tier-standard {
-    color: #c0c0c0;
-}
+/* ============================================================================
+ * PROGRESS BARS - Angular Style
+ * ============================================================================ */
 
-.tier-basic {
-    color: #cd7f32;
-}
-
-/* Reputation bar */
-.reputation-container {
-    height: 3;
-    margin: 1;
+ProgressBar {
     padding: 0 1;
 }
 
-.reputation-bar {
-    height: 1;
-    background: $surface-darken-1;
-    border: solid $primary;
+ProgressBar > .bar--bar {
+    color: #ff6a00;
+    background: #1a1a1a;
 }
 
-.reputation-fill {
-    height: 1;
-    background: $success;
+ProgressBar > .bar--complete {
+    color: #00ff41;
 }
 
-.reputation-label {
-    text-align: right;
-    color: $text-muted;
-    padding-right: 1;
+/* ============================================================================
+ * BUTTONS - Brutalist Heavy
+ * ============================================================================ */
+
+Button {
+    background: #1a1a1a;
+    color: #00ffff;
+    text-style: bold;
+    border: heavy #00ffff;
+    padding: 0 2;
+    min-width: 12;
 }
 
-/* Chat */
-.chat-container {
-    height: 1fr;
+Button:hover {
+    background: #00ffff;
+    color: #0a0a0a;
+    border: heavy #00ffff;
+}
+
+Button:focus {
+    border: heavy #ff6a00;
+}
+
+Button.-primary {
+    background: #ff6a00;
+    color: #0a0a0a;
+    border: heavy #ff6a00;
+}
+
+Button.-primary:hover {
+    background: #ffaa00;
+    color: #0a0a0a;
+}
+
+/* ============================================================================
+ * INPUT FIELDS - Terminal Style
+ * ============================================================================ */
+
+Input {
+    background: #1a1a1a;
+    color: #ffffff;
+    border: heavy #00ffff;
+    padding: 0 1;
+}
+
+Input:focus {
+    border: heavy #ff6a00;
+}
+
+TextArea {
+    background: #1a1a1a;
+    color: #ffffff;
+    border: heavy #00ffff;
     padding: 1;
 }
 
-#messages {
-    height: 1fr;
-    border: solid $primary;
+TextArea:focus {
+    border: heavy #ff6a00;
+}
+
+/* ============================================================================
+ * SELECT DROPDOWNS
+ * ============================================================================ */
+
+Select {
+    background: #1a1a1a;
+    color: #00ffff;
+    border: heavy #00ffff;
+}
+
+Select:focus {
+    border: heavy #ff6a00;
+}
+
+SelectOverlay {
+    background: #111111;
+    border: heavy #ff6a00;
+}
+
+SelectCurrent {
+    background: #1a1a1a;
+    color: #00ffff;
+}
+
+/* ============================================================================
+ * RICH LOG - Activity Log Style
+ * ============================================================================ */
+
+RichLog {
+    background: #1a1a1a;
+    color: #888888;
+    border: heavy #00ffff;
     padding: 1;
-    margin-bottom: 1;
-    background: $surface-lighten-1;
+    margin: 1;
+    height: 10;
+    max-height: 15;
+}
+
+/* ============================================================================
+ * SCROLL CONTAINERS
+ * ============================================================================ */
+
+VerticalScroll {
+    background: #0f0f0f;
+    border: heavy #00ffff;
+    scrollbar-background: #111111;
+    scrollbar-color: #ff6a00;
+}
+
+/* ============================================================================
+ * MESSAGES - Chat Style
+ * ============================================================================ */
+
+#messages-container {
+    background: #0f0f0f;
+    border: heavy #00ffff;
+    padding: 1;
+    margin: 1;
+    height: 1fr;
 }
 
 .message {
     margin-bottom: 1;
     padding: 1;
-    border: solid $primary-darken-1;
+    background: #1a1a1a;
+    border: solid #444444;
 }
 
-.message-user {
-    background: $primary-darken-2;
-    border: solid $primary;
+.user-message {
+    background: #111111;
+    border-left: heavy #ff6a00;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
 }
 
-.message-assistant {
-    background: $surface-lighten-2;
-    border: solid $accent;
+.assistant-message {
+    background: #1a1a1a;
+    border-left: heavy #00ffff;
+    border-top: none;
+    border-right: none;
+    border-bottom: none;
 }
 
 .message-header {
-    color: $accent;
+    color: #ff6a00;
     text-style: bold;
-    margin-bottom: 1;
 }
 
-.input-area {
+/* ============================================================================
+ * CONTROLS ROW
+ * ============================================================================ */
+
+.controls-row {
     height: auto;
-    padding: 1 0;
-}
-
-#mode-select, #difficulty-select {
-    width: 20;
-    margin-right: 1;
-}
-
-#prompt-input {
-    height: 5;
-    border: solid $accent;
+    padding: 0 1;
     margin: 1 0;
 }
 
-#send-btn {
-    margin-top: 1;
+#mode-select {
+    width: 20;
 }
 
-#status-text {
+#difficulty-select {
+    width: 20;
     margin-left: 2;
-    padding: 1;
-    color: $text-muted;
 }
 
-/* Leaderboard */
-.leaderboard-item {
+/* ============================================================================
+ * PROMPT INPUT
+ * ============================================================================ */
+
+#prompt-input {
+    height: 5;
+    margin: 1;
+    background: #1a1a1a;
+    border: heavy #ff6a00;
+}
+
+/* ============================================================================
+ * BUTTON ROW
+ * ============================================================================ */
+
+.button-row {
+    height: auto;
     padding: 0 1;
-    height: 2;
 }
 
-.leaderboard-rank {
-    width: 4;
+#send-btn {
+    width: 15;
+}
+
+#status-label {
+    margin-left: 2;
+    padding: 0 1;
+    color: #00ffff;
+    text-style: bold;
+}
+
+.control-label {
+    width: auto;
+    padding: 0 1;
+    color: #ff6a00;
+    text-style: bold;
+    content-align: center middle;
+}
+
+.info-separator {
+    color: #444444;
+    height: 1;
+    margin: 1 0;
+}
+
+/* ============================================================================
+ * EMPTY STATE
+ * ============================================================================ */
+
+.empty-chat {
     text-align: center;
+    color: #444444;
+    padding: 5;
 }
 
-.leaderboard-node {
+/* ============================================================================
+ * NODE INFO PANEL
+ * ============================================================================ */
+
+.node-info-panel {
+    height: auto;
+    background: #1a1a1a;
+    border: heavy #00ffff;
+    padding: 1 2;
+    margin: 1;
+}
+
+.info-row {
+    height: 1;
+    margin-bottom: 1;
+}
+
+.info-label {
+    width: 15;
+    color: #ff6a00;
+    text-style: bold;
+}
+
+.info-value {
     width: 1fr;
+    color: #ffffff;
 }
 
-.leaderboard-rep {
-    width: 10;
-    text-align: right;
+/* ============================================================================
+ * REPUTATION SECTION
+ * ============================================================================ */
+
+.reputation-section {
+    height: auto;
+    padding: 1;
+    margin: 1;
+    background: #1a1a1a;
+    border: heavy #ff6a00;
 }
 
-.leaderboard-tasks {
-    width: 12;
-    text-align: right;
-    color: $text-muted;
+.rep-text {
+    text-align: center;
+    padding: 1;
+    color: #ff6a00;
+    text-style: bold;
 }
 
-/* Network screen layout */
+#rep-bar {
+    margin: 0 2;
+}
+
+/* ============================================================================
+ * TIER COLORS
+ * ============================================================================ */
+
+.tier-premium {
+    color: #ff6a00;
+    text-style: bold;
+}
+
+.tier-standard {
+    color: #00ffff;
+    text-style: bold;
+}
+
+.tier-basic {
+    color: #666666;
+}
+
+/* ============================================================================
+ * SCREEN LAYOUTS
+ * ============================================================================ */
+
 NetworkScreen {
     layout: vertical;
     padding: 1;
 }
 
-/* Node screen layout */
 NodeScreen {
     layout: vertical;
     padding: 1;
 }
 
-/* Chat screen layout */
 ChatScreen {
     layout: vertical;
     padding: 1;
-}
-
-/* Log area */
-RichLog {
-    height: 10;
-    border: solid $primary;
-    margin: 1;
-    background: $surface-darken-1;
-}
-
-/* Scrollable containers */
-VerticalScroll {
-    height: 1fr;
-}
-
-/* Welcome/empty state */
-.empty-state {
-    text-align: center;
-    color: $text-muted;
-    padding: 3;
 }

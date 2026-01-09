@@ -1,0 +1,22 @@
+{
+  "name": "iris-tui",
+  "version": "1.0.0",
+  "description": "Iris Network TUI - Futuristic Brutalist Dashboard",
+  "main": "src/index.js",
+  "bin": {
+    "iris": "./bin/iris"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0",
+    "axios": "^1.6.0",
+    "yaml": "^2.3.0"
+  },
+  "keywords": ["tui", "terminal", "dashboard", "iris", "ai"],
+  "author": "Iris Network",
+  "license": "MIT"
+}

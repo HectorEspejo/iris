@@ -1,4 +1,9 @@
-"""Network Dashboard Screen."""
+"""
+Network Dashboard Screen - Brutalist Design.
+
+Displays network statistics, active nodes, and reputation leaderboard
+with a futuristic brutalist aesthetic.
+"""
 
 from textual.app import ComposeResult
 from textual.widgets import Static, DataTable
@@ -10,38 +15,53 @@ from ..widgets import StatsCard
 class NetworkScreen(Container):
     """Dashboard showing network statistics and node information."""
 
-    DEFAULT_CSS = """
-    NetworkScreen {
-        layout: vertical;
-        padding: 1;
-    }
-    """
-
     def compose(self) -> ComposeResult:
         """Create the network dashboard layout."""
-        yield Static(" Network Overview ", classes="section-title")
+        yield Static(" NETWORK OVERVIEW ", classes="section-title")
 
         with Horizontal(classes="stats-row"):
-            yield StatsCard("Nodes Online", "0", icon="[bold cyan]Nodes[/]", id="stat-nodes")
-            yield StatsCard("Tasks Today", "0", icon="[bold green]Today[/]", id="stat-today")
-            yield StatsCard("Total Tasks", "0", icon="[bold blue]Total[/]", id="stat-total")
-            yield StatsCard("Users", "0", icon="[bold magenta]Users[/]", id="stat-users")
+            yield StatsCard(
+                "ONLINE",
+                "0",
+                icon="[#ff6a00]◉[/]",
+                id="stat-nodes"
+            )
+            yield StatsCard(
+                "TODAY",
+                "0",
+                icon="[#00ffff]▤[/]",
+                id="stat-today"
+            )
+            yield StatsCard(
+                "TOTAL",
+                "0",
+                icon="[#ff6a00]Σ[/]",
+                id="stat-total"
+            )
+            yield StatsCard(
+                "USERS",
+                "0",
+                icon="[#00ffff]◎[/]",
+                id="stat-users"
+            )
 
-        yield Static(" Active Nodes ", classes="section-title")
+        yield Static(" ACTIVE NODES ", classes="section-title")
         yield DataTable(id="nodes-table")
 
-        yield Static(" Reputation Leaderboard ", classes="section-title")
+        yield Static(" LEADERBOARD ", classes="section-title")
         yield DataTable(id="leaderboard-table")
 
     def on_mount(self) -> None:
         """Initialize tables when mounted."""
         # Setup nodes table
         nodes_table = self.query_one("#nodes-table", DataTable)
-        nodes_table.add_columns("Node ID", "Tier", "Model", "Load", "Status")
+        nodes_table.add_columns("NODE ID", "TIER", "MODEL", "LOAD", "STATUS")
+        nodes_table.cursor_type = "row"
 
         # Setup leaderboard table
         leaderboard = self.query_one("#leaderboard-table", DataTable)
-        leaderboard.add_columns("Rank", "Node ID", "Reputation", "Tasks")
+        leaderboard.add_columns("RANK", "NODE ID", "REP", "TASKS")
+        leaderboard.cursor_type = "row"
 
     def update_data(self, stats: dict, reputation: list, nodes: list) -> None:
         """Update the screen with new data."""
@@ -77,9 +97,12 @@ class NetworkScreen(Container):
                 tier = node.get("node_tier", "BASIC")
                 model = node.get("model_name", "Unknown")[:15]
                 load = f"{node.get('current_load', 0)}/10"
-                status = "[green]Online[/]" if node.get("is_online", True) else "[red]Offline[/]"
+                is_online = node.get("is_online", True)
 
-                # Color tier
+                # Format status with Evangelion-style indicator
+                status = "[#00ff41]▶ ON[/]" if is_online else "[#ff0000]◼ OFF[/]"
+
+                # Color tier with brutalist style
                 tier_display = self._format_tier(tier)
 
                 table.add_row(node_id, tier_display, model, load, status)
@@ -93,24 +116,30 @@ class NetworkScreen(Container):
             table = self.query_one("#leaderboard-table", DataTable)
             table.clear()
 
-            medals = ["[yellow]1[/]", "[white]2[/]", "[#cd7f32]3[/]"]
+            # Brutalist rank indicators
+            ranks = ["[#ff6a00]#01[/]", "[#00ffff]#02[/]", "[#ff0055]#03[/]"]
 
             for i, node in enumerate(reputation[:10]):  # Show top 10
-                rank = medals[i] if i < 3 else str(i + 1)
-                node_id = node.get("node_id", "Unknown")[:25]
-                rep = str(node.get("reputation", 0))
-                tasks = str(node.get("tasks_completed", 0))
+                rank = ranks[i] if i < 3 else f"#{i + 1:02d}"
+                node_id = node.get("node_id", "Unknown")[:20]
+                rep = node.get("reputation", 0)
+                tasks = node.get("tasks_completed", 0)
 
-                table.add_row(rank, node_id, rep, tasks)
+                # Create mini progress bar for reputation
+                bar_filled = int(rep / 100 * 10)
+                bar_empty = 10 - bar_filled
+                rep_bar = f"[#ff6a00]{'▓' * bar_filled}[/][#444444]{'░' * bar_empty}[/] {rep}"
+
+                table.add_row(rank, node_id, rep_bar, str(tasks))
 
         except Exception:
             pass
 
     def _format_tier(self, tier: str) -> str:
-        """Format tier with color."""
+        """Format tier with brutalist colors."""
         colors = {
-            "PREMIUM": "[bold #ffd700]PREMIUM[/]",
-            "STANDARD": "[#c0c0c0]STANDARD[/]",
-            "BASIC": "[#cd7f32]BASIC[/]",
+            "PREMIUM": "[#ff6a00 bold]▌PREMIUM▐[/]",
+            "STANDARD": "[#00ffff]▌STANDARD▐[/]",
+            "BASIC": "[#666666]▌BASIC▐[/]",
         }
-        return colors.get(tier.upper(), tier)
+        return colors.get(tier.upper(), f"▌{tier}▐")

@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+/**
+ * Iris Network TUI CLI
+ */
+
+require('../src/index');

@@ -73,42 +73,63 @@ EOF
 ./iris-node --config config.yaml
 ```
 
-### Interactive TUI Dashboard
+### After Installation
 
-Launch the interactive terminal dashboard:
+The installer creates two commands:
 
 ```bash
-# Run TUI
-python -m client.tui
+# Open interactive dashboard (TUI)
+iris
 
-# Or via CLI
-python -m client.cli tui
-
-# With node config
-python -m client.cli tui --config ~/.iris/config.yaml
+# Start the node agent
+iris-node
 ```
 
-The TUI provides:
+### Interactive TUI Dashboard
+
+The `iris` command opens an interactive terminal dashboard:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  IRIS NETWORK                           [1]Node [2]Net [3]Chat  │
+├─────────────────────────────────────────────────────────────────┤
+│  ● CONNECTED    Nodes: 12    Tasks: 847    Rep: 87/100         │
+├─────────────────────────────────────────────────────────────────┤
+│  Leaderboard:                                                   │
+│  🥇 node-alpha    Rep: 156   Tasks: 1,234                      │
+│  🥈 node-beta     Rep: 142   Tasks: 1,089                      │
+│  🥉 your-node     Rep: 87    Tasks: 156   ← YOU                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
 - **Network Tab** - Live stats, active nodes, reputation leaderboard
 - **Node Tab** - Your node status, performance metrics, activity log
 - **Chat Tab** - Interactive chat interface to send inference requests
 
 **Keyboard shortcuts:** `1` Node | `2` Network | `3` Chat | `R` Refresh | `Q` Quit
 
-### After Installation
+### CLI Commands
 
 ```bash
-# Check node status
-iris-node --help
+iris stats        # Network statistics
+iris nodes        # Active nodes
+iris reputation   # Leaderboard
+iris ask "prompt" # Send inference request
+iris --help       # All commands
+```
 
+### Service Management
+
+```bash
 # View logs
 tail -f ~/.iris/logs/node.log
 
-# Service commands (Linux)
+# Linux
 sudo systemctl status iris-node
 sudo systemctl restart iris-node
 
-# Service commands (macOS)
+# macOS
 launchctl list | grep iris
 ```
 
