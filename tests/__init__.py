@@ -1,0 +1,3 @@
+"""
+ClubAI Tests
+"""

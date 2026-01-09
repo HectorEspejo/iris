@@ -1,0 +1,4 @@
+client
+coordinator
+node_agent
+shared

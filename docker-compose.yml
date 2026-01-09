@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # Central coordinator
+  coordinator:
+    build:
+      context: .
+      dockerfile: coordinator/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/coordinator:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///data/clubai.db
+      - JWT_SECRET=dev-secret-change-in-production
+      - COORDINATOR_PRIVATE_KEY_PATH=/app/data/coordinator.key
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - clubai-network
+
+  # Node 1 - connects to LM Studio on host port 1234
+  node1:
+    build:
+      context: .
+      dockerfile: node_agent/Dockerfile
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    volumes:
+      - ./data/node1:/app/data
+    environment:
+      - NODE_ID=node-1
+      - COORDINATOR_URL=ws://coordinator:8000/nodes/connect
+      - LMSTUDIO_URL=http://host.docker.internal:1234/v1
+      - NODE_KEY_PATH=/app/data/node.key
+      - NODE_VRAM_GB=8
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - clubai-network
+    restart: unless-stopped
+
+  # Node 2 - connects to LM Studio on host port 1235
+  node2:
+    build:
+      context: .
+      dockerfile: node_agent/Dockerfile
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    volumes:
+      - ./data/node2:/app/data
+    environment:
+      - NODE_ID=node-2
+      - COORDINATOR_URL=ws://coordinator:8000/nodes/connect
+      - LMSTUDIO_URL=http://host.docker.internal:1235/v1
+      - NODE_KEY_PATH=/app/data/node.key
+      - NODE_VRAM_GB=8
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - clubai-network
+    restart: unless-stopped
+
+  # Node 3 - connects to LM Studio on host port 1236
+  node3:
+    build:
+      context: .
+      dockerfile: node_agent/Dockerfile
+    depends_on:
+      coordinator:
+        condition: service_healthy
+    volumes:
+      - ./data/node3:/app/data
+    environment:
+      - NODE_ID=node-3
+      - COORDINATOR_URL=ws://coordinator:8000/nodes/connect
+      - LMSTUDIO_URL=http://host.docker.internal:1236/v1
+      - NODE_KEY_PATH=/app/data/node.key
+      - NODE_VRAM_GB=8
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - clubai-network
+    restart: unless-stopped
+
+networks:
+  clubai-network:
+    driver: bridge
+
+volumes:
+  coordinator-data:
+  node1-data:
+  node2-data:
+  node3-data:

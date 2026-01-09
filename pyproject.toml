@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clubai"
+version = "0.1.0"
+description = "ClubAI - Distributed AI Inference Network"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+    "aiosqlite>=0.19.0",
+    "httpx>=0.24.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "cryptography>=41.0.0",
+    "structlog>=23.1.0",
+    "websockets>=11.0.0",
+    "bcrypt>=4.0.0",
+    "jinja2>=3.1.0",
+    "pynvml>=11.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+windows = [
+    "wmi>=1.5.1",
+    "pywin32>=306",
+]
+
+[project.scripts]
+clubai = "client.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["client*", "coordinator*", "node_agent*", "shared*"]
