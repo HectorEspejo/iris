@@ -12,7 +12,8 @@ logger = structlog.get_logger()
 
 # Default configuration
 DEFAULT_BASE_URL = "http://localhost:1234/v1"
-DEFAULT_TIMEOUT = 60.0
+DEFAULT_TIMEOUT = 120.0  # Default timeout for health checks, model listing, etc.
+MAX_GENERATION_TIMEOUT = 300.0  # Max timeout for text generation (5 minutes)
 
 
 class LMStudioClient:
@@ -152,7 +153,8 @@ class LMStudioClient:
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
-        stream: bool = False
+        stream: bool = False,
+        timeout: Optional[float] = None
     ) -> dict:
         """
         Send a chat completion request.
@@ -163,6 +165,7 @@ class LMStudioClient:
             temperature: Sampling temperature (0-2)
             max_tokens: Maximum tokens to generate
             stream: Whether to stream the response
+            timeout: Request timeout in seconds (overrides client default)
 
         Returns:
             Chat completion response
@@ -183,15 +186,20 @@ class LMStudioClient:
         if max_tokens:
             payload["max_tokens"] = max_tokens
 
+        # Use custom timeout if provided, otherwise use max generation timeout
+        request_timeout = timeout if timeout else MAX_GENERATION_TIMEOUT
+
         logger.debug(
             "chat_completion_request",
             model=model,
-            messages_count=len(messages)
+            messages_count=len(messages),
+            timeout=request_timeout
         )
 
         response = await self.client.post(
             "/chat/completions",
-            json=payload
+            json=payload,
+            timeout=request_timeout
         )
         response.raise_for_status()
 
@@ -259,7 +267,8 @@ class LMStudioClient:
         prompt: str,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None
     ) -> str:
         """
         Simple completion helper that returns just the text response.
@@ -269,6 +278,7 @@ class LMStudioClient:
             system_prompt: Optional system prompt
             temperature: Sampling temperature
             max_tokens: Maximum tokens
+            timeout: Request timeout in seconds
 
         Returns:
             Generated text response
@@ -289,7 +299,8 @@ class LMStudioClient:
         result = await self.chat_completion(
             messages=messages,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            timeout=timeout
         )
 
         # Extract text from response

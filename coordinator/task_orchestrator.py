@@ -35,8 +35,20 @@ from .difficulty_classifier import classify_task_difficulty
 logger = structlog.get_logger()
 
 # Constants
-DEFAULT_TIMEOUT = 60  # seconds
 MAX_RETRIES = 3
+
+# Timeout por dificultad de tarea (en segundos)
+DIFFICULTY_TIMEOUTS = {
+    TaskDifficulty.SIMPLE: 60,    # Tareas simples: 1 minuto
+    TaskDifficulty.COMPLEX: 120,  # Tareas complejas: 2 minutos
+    TaskDifficulty.ADVANCED: 180, # Tareas avanzadas: 3 minutos
+}
+DEFAULT_TIMEOUT = 60  # Fallback
+
+
+def get_timeout_for_difficulty(difficulty: TaskDifficulty) -> int:
+    """Get the timeout in seconds for a given task difficulty."""
+    return DIFFICULTY_TIMEOUTS.get(difficulty, DEFAULT_TIMEOUT)
 
 
 class TaskOrchestrator:
@@ -148,8 +160,10 @@ class TaskOrchestrator:
             # Assign subtasks to nodes using intelligent matching
             await self._assign_subtasks(subtasks, adjusted_difficulty)
 
-            # Wait for all subtasks to complete
-            await self._wait_for_completion(task_id, subtasks)
+            # Wait for all subtasks to complete with difficulty-based timeout
+            # Add extra buffer time for coordination overhead
+            wait_timeout = get_timeout_for_difficulty(adjusted_difficulty) + 30
+            await self._wait_for_completion(task_id, subtasks, timeout=wait_timeout)
 
             # Aggregate results
             from .response_aggregator import response_aggregator
@@ -356,6 +370,9 @@ class TaskOrchestrator:
                 encrypted_prompt
             )
 
+            # Get timeout based on difficulty
+            timeout_seconds = get_timeout_for_difficulty(difficulty)
+
             # Create and send task assignment
             message = ProtocolMessage.create(
                 MessageType.TASK_ASSIGN,
@@ -363,7 +380,7 @@ class TaskOrchestrator:
                     subtask_id=subtask["id"],
                     task_id=subtask["task_id"],
                     encrypted_prompt=encrypted_prompt,
-                    timeout_seconds=DEFAULT_TIMEOUT
+                    timeout_seconds=timeout_seconds
                 )
             )
 
@@ -376,7 +393,8 @@ class TaskOrchestrator:
                     subtask_id=subtask["id"],
                     node_id=node.node_id,
                     node_tier=node.node_tier.value,
-                    difficulty=difficulty.value
+                    difficulty=difficulty.value,
+                    timeout_seconds=timeout_seconds
                 )
             else:
                 await db.fail_subtask(subtask["id"], SubtaskStatus.FAILED.value)

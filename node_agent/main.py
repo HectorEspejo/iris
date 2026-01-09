@@ -324,10 +324,19 @@ class NodeAgent:
 
             logger.debug("task_decrypted", subtask_id=payload.subtask_id)
 
-            # Execute via LM Studio
+            # Execute via LM Studio with proper timeout
+            # Pass timeout to LM Studio client so HTTP request has correct timeout
+            logger.debug(
+                "executing_inference",
+                subtask_id=payload.subtask_id,
+                timeout_seconds=payload.timeout_seconds
+            )
             response = await asyncio.wait_for(
-                self._lm_client.simple_completion(prompt),
-                timeout=payload.timeout_seconds
+                self._lm_client.simple_completion(
+                    prompt,
+                    timeout=float(payload.timeout_seconds)
+                ),
+                timeout=payload.timeout_seconds + 10  # Extra buffer for network overhead
             )
 
             # Calculate execution time
