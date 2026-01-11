@@ -87,9 +87,9 @@ def calculate_node_tier(
     - Speed (30%): 50+ tps = 30pts, 20+ tps = 20pts, 10+ tps = 10pts
 
     Thresholds:
-    - Premium: 70+ points
-    - Standard: 40-69 points
-    - Basic: <40 points
+    - Premium: 61+ points
+    - Standard: 21-60 points
+    - Basic: 0-20 points
     """
     score = 0
 
@@ -120,9 +120,9 @@ def calculate_node_tier(
         score += 10
 
     # Determine tier
-    if score >= 70:
+    if score >= 61:
         return NodeTier.PREMIUM
-    elif score >= 40:
+    elif score >= 21:
         return NodeTier.STANDARD
     return NodeTier.BASIC
 
