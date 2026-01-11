@@ -83,7 +83,7 @@ def calculate_node_tier(
 
     Scoring:
     - VRAM (25%): 24+ GB = 25pts, 16+ GB = 20pts, 12+ GB = 15pts, 8+ GB = 10pts
-    - Model params (50%): 70B+ = 50pts, 30B+ = 40pts, 13B+ = 25pts, 7B+ = 15pts
+    - Model params (50%): 100B+ = 65pts, 70B+ = 50pts, 30B+ = 40pts, 13B+ = 25pts, 7B+ = 15pts
     - Speed (25%): 50+ tps = 25pts, 20+ tps = 15pts, 10+ tps = 10pts
 
     Thresholds:
@@ -103,8 +103,10 @@ def calculate_node_tier(
     elif vram_gb >= 8:
         score += 10
 
-    # Model params score (0-50) - higher weight for larger models
-    if model_params >= 70:
+    # Model params score (0-65) - higher weight for larger models
+    if model_params >= 100:
+        score += 65  # Auto-PREMIUM for 100B+ models
+    elif model_params >= 70:
         score += 50
     elif model_params >= 30:
         score += 40
