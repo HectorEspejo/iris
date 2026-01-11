@@ -148,7 +148,24 @@ class OpenRouterClassifier:
                 return None
 
             data = response.json()
+
+            # Log full response structure for debugging
+            logger.info(
+                "openrouter_raw_response",
+                data=str(data)[:500]
+            )
+
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            # If content is empty, check for error in response
+            if not content:
+                error = data.get("error", {})
+                if error:
+                    logger.warning(
+                        "openrouter_response_error",
+                        error=str(error)[:200]
+                    )
+                    return None
 
             difficulty = self._parse_classification_response(content)
 
@@ -163,7 +180,7 @@ class OpenRouterClassifier:
             else:
                 logger.warning(
                     "classification_parse_failed",
-                    response=content[:100]
+                    response=content[:100] if content else "(empty response)"
                 )
                 return None
 
