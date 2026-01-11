@@ -45,9 +45,9 @@ rate_limit_store: dict[str, dict] = defaultdict(lambda: {
     "unlimited": False
 })
 
-# Constants
-ANONYMOUS_LIMIT = 1
-VERIFIED_LIMIT = 3
+# Constants - Rate limiting disabled (unlimited messages)
+ANONYMOUS_LIMIT = 999999
+VERIFIED_LIMIT = 999999
 UNLIMITED_LIMIT = 999999
 RATE_LIMIT_WINDOW_HOURS = 24
 
