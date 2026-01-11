@@ -585,16 +585,24 @@ class TaskOrchestrator:
                 payload.encrypted_chunk
             )
 
-            # Push chunk to streaming manager
-            await streaming_manager.push_chunk(payload.task_id, chunk)
-
-            logger.debug(
-                "stream_chunk_received",
+            logger.info(
+                "stream_chunk_received_from_node",
                 task_id=payload.task_id,
                 subtask_id=payload.subtask_id,
                 chunk_index=payload.chunk_index,
-                chunk_length=len(chunk)
+                chunk_length=len(chunk),
+                node_id=node_id
             )
+
+            # Push chunk to streaming manager
+            success = await streaming_manager.push_chunk(payload.task_id, chunk)
+
+            if not success:
+                logger.warning(
+                    "stream_chunk_push_failed",
+                    task_id=payload.task_id,
+                    chunk_index=payload.chunk_index
+                )
 
         except Exception as e:
             logger.error(

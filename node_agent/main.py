@@ -419,31 +419,60 @@ class NodeAgent:
             # Track token generation for metrics and streaming
             tokens_generated = 0
             chunk_index = 0
+
+            # For streaming: use a queue to send chunks to coordinator
+            # This avoids issues with asyncio.create_task in sync callbacks
+            stream_queue: asyncio.Queue = asyncio.Queue() if payload.enable_streaming else None
+            stream_task = None
+
+            async def stream_sender():
+                """Background task to send stream chunks from the queue."""
+                nonlocal chunk_index
+                while True:
+                    try:
+                        chunk_text = await asyncio.wait_for(stream_queue.get(), timeout=0.5)
+                        if chunk_text is None:  # Sentinel to stop
+                            break
+                        encrypted_chunk = node_crypto.encrypt_for_coordinator(chunk_text)
+                        stream_message = ProtocolMessage.create(
+                            MessageType.TASK_STREAM,
+                            TaskStreamPayload(
+                                subtask_id=payload.subtask_id,
+                                task_id=payload.task_id,
+                                encrypted_chunk=encrypted_chunk,
+                                chunk_index=chunk_index
+                            )
+                        )
+                        await self._send_message(stream_message)
+                        logger.info(
+                            "stream_chunk_sent",
+                            task_id=payload.task_id,
+                            chunk_index=chunk_index,
+                            chunk_length=len(chunk_text)
+                        )
+                        chunk_index += 1
+                    except asyncio.TimeoutError:
+                        # No chunk available, continue waiting
+                        continue
+                    except Exception as e:
+                        logger.error("stream_sender_error", error=str(e))
+                        break
+
+            # Start stream sender if streaming is enabled
+            if payload.enable_streaming:
+                stream_task = asyncio.create_task(stream_sender())
+                logger.info("stream_sender_started", task_id=payload.task_id)
+
+            # Buffer for batching tokens
             chunk_buffer = []
             last_stream_time = time.time()
-
-            async def send_stream_chunk(chunk_text: str):
-                """Send a streaming chunk to the coordinator."""
-                nonlocal chunk_index
-                encrypted_chunk = node_crypto.encrypt_for_coordinator(chunk_text)
-                stream_message = ProtocolMessage.create(
-                    MessageType.TASK_STREAM,
-                    TaskStreamPayload(
-                        subtask_id=payload.subtask_id,
-                        task_id=payload.task_id,
-                        encrypted_chunk=encrypted_chunk,
-                        chunk_index=chunk_index
-                    )
-                )
-                await self._send_message(stream_message)
-                chunk_index += 1
 
             def on_token(chunk: str, count: int):
                 nonlocal tokens_generated, chunk_buffer, last_stream_time
                 tokens_generated = count
 
                 # If streaming is enabled, buffer chunks and send periodically
-                if payload.enable_streaming:
+                if payload.enable_streaming and stream_queue:
                     chunk_buffer.append(chunk)
                     current_time = time.time()
                     # Send every 5 tokens or every 150ms, whichever comes first
@@ -451,8 +480,11 @@ class NodeAgent:
                         chunk_text = "".join(chunk_buffer)
                         chunk_buffer.clear()
                         last_stream_time = current_time
-                        # Schedule async send (can't await in sync callback)
-                        asyncio.create_task(send_stream_chunk(chunk_text))
+                        # Put chunk in queue (non-blocking for sync callback)
+                        try:
+                            stream_queue.put_nowait(chunk_text)
+                        except asyncio.QueueFull:
+                            logger.warning("stream_queue_full", task_id=payload.task_id)
 
             response = await self._lm_client.simple_completion_stream(
                 prompt,
@@ -461,8 +493,21 @@ class NodeAgent:
             )
 
             # Send any remaining buffered chunks
-            if payload.enable_streaming and chunk_buffer:
-                await send_stream_chunk("".join(chunk_buffer))
+            if payload.enable_streaming and chunk_buffer and stream_queue:
+                try:
+                    stream_queue.put_nowait("".join(chunk_buffer))
+                except asyncio.QueueFull:
+                    pass
+
+            # Stop the stream sender
+            if payload.enable_streaming and stream_queue:
+                await stream_queue.put(None)  # Sentinel to stop
+                if stream_task:
+                    try:
+                        await asyncio.wait_for(stream_task, timeout=5.0)
+                    except asyncio.TimeoutError:
+                        stream_task.cancel()
+                logger.info("stream_sender_stopped", task_id=payload.task_id, chunks_sent=chunk_index)
 
             logger.debug(
                 "inference_complete",

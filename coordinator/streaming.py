@@ -55,12 +55,17 @@ class StreamingManager:
         stream_task = StreamingTask(task_id=task_id)
         self._tasks[task_id] = stream_task
 
-        logger.debug("stream_created", task_id=task_id)
+        logger.info("stream_created", task_id=task_id, active_streams=len(self._tasks))
         return stream_task
 
     def get_stream(self, task_id: str) -> Optional[StreamingTask]:
         """Get an existing streaming task."""
-        return self._tasks.get(task_id)
+        stream = self._tasks.get(task_id)
+        if stream:
+            logger.info("stream_retrieved", task_id=task_id, chunks_received=stream.chunks_received)
+        else:
+            logger.warning("stream_not_found", task_id=task_id, available_streams=list(self._tasks.keys()))
+        return stream
 
     async def push_chunk(self, task_id: str, chunk: str) -> bool:
         """
@@ -75,16 +80,17 @@ class StreamingManager:
         """
         stream_task = self._tasks.get(task_id)
         if not stream_task:
-            logger.warning("stream_not_found_for_chunk", task_id=task_id)
+            logger.warning("stream_not_found_for_chunk", task_id=task_id, available_streams=list(self._tasks.keys()))
             return False
 
         await stream_task.queue.put({"type": "chunk", "content": chunk})
         stream_task.chunks_received += 1
 
-        logger.debug(
+        logger.info(
             "chunk_pushed",
             task_id=task_id,
-            chunks_received=stream_task.chunks_received
+            chunks_received=stream_task.chunks_received,
+            chunk_preview=chunk[:50] if len(chunk) > 50 else chunk
         )
         return True
 

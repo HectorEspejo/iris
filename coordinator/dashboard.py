@@ -343,13 +343,20 @@ async def api_chat_stream(request: Request, chat_request: StreamChatRequest):
 
         async def event_generator():
             """Generate SSE events from the streaming queue."""
+            import structlog
+            sse_logger = structlog.get_logger()
+
+            sse_logger.info("sse_event_generator_started", task_id=task_id)
+
             stream = streaming_manager.get_stream(task_id)
             if not stream:
+                sse_logger.error("sse_stream_not_found", task_id=task_id)
                 yield f"data: {json.dumps({'type': 'error', 'content': 'Stream not found'})}\n\n"
                 return
 
             try:
                 full_response = ""
+                chunks_yielded = 0
                 while True:
                     try:
                         # Wait for chunks with timeout
@@ -364,25 +371,36 @@ async def api_chat_stream(request: Request, chat_request: StreamChatRequest):
 
                         if event["type"] == "chunk":
                             full_response += event["content"]
+                            chunks_yielded += 1
+                            sse_logger.info(
+                                "sse_chunk_yielding",
+                                task_id=task_id,
+                                chunk_num=chunks_yielded,
+                                chunk_length=len(event["content"])
+                            )
                             yield f"data: {json.dumps({'type': 'chunk', 'content': event['content']})}\n\n"
 
                         elif event["type"] == "done":
                             # Record message usage on success
                             record_message(client_id)
                             _, new_remaining = check_rate_limit(client_id)
+                            sse_logger.info("sse_done", task_id=task_id, total_chunks=chunks_yielded)
                             yield f"data: {json.dumps({'type': 'done', 'messages_remaining': new_remaining})}\n\n"
                             break
 
                         elif event["type"] == "error":
+                            sse_logger.error("sse_error", task_id=task_id, error=event.get("content"))
                             yield f"data: {json.dumps({'type': 'error', 'content': event['content']})}\n\n"
                             break
 
                     except asyncio.TimeoutError:
                         # Send keepalive if no activity
+                        sse_logger.debug("sse_keepalive", task_id=task_id, chunks_so_far=chunks_yielded)
                         yield f"data: {json.dumps({'type': 'keepalive'})}\n\n"
 
             finally:
                 # Cleanup stream
+                sse_logger.info("sse_cleanup", task_id=task_id)
                 streaming_manager.remove_stream(task_id)
 
         return StreamingResponse(
