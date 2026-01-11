@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iris Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand': {
+                            50: '#f0f4ff',
+                            100: '#e0e9ff',
+                            200: '#c7d6fe',
+                            300: '#a4b8fc',
+                            400: '#8093f8',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                            800: '#3730a3',
+                            900: '#312e81',
+                        }
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @keyframes gradient-shift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        .gradient-animate {
+            background-size: 200% 200%;
+            animation: gradient-shift 8s ease infinite;
+        }
+
+        .glass {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .status-dot {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        .typing-indicator span {
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-indicator span:nth-child(1) { animation-delay: 0s; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-4px); }
+        }
+
+        .message-fade-in {
+            animation: messageFadeIn 0.3s ease-out;
+        }
+
+        @keyframes messageFadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: #1f2937;
+            border-radius: 3px;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 3px;
+        }
+
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col">
+    <!-- Background decoration -->
+    <div class="fixed inset-0 overflow-hidden pointer-events-none">
+        <div class="absolute -top-40 -right-40 w-80 h-80 bg-brand-600/10 rounded-full blur-3xl"></div>
+        <div class="absolute top-1/2 -left-40 w-80 h-80 bg-purple-600/10 rounded-full blur-3xl"></div>
+        <div class="absolute -bottom-40 right-1/3 w-80 h-80 bg-blue-600/10 rounded-full blur-3xl"></div>
+    </div>
+
+    <!-- Header -->
+    <header class="relative glass border-b border-gray-800/50 sticky top-0 z-50">
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <a href="/dashboard" class="relative">
+                        <div class="w-11 h-11 bg-gradient-to-br from-brand-500 via-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-lg shadow-brand-500/25 gradient-animate">
+                            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                            </svg>
+                        </div>
+                        <div id="status-indicator" class="absolute -bottom-1 -right-1 w-4 h-4 bg-gray-500 rounded-full border-2 border-gray-950"></div>
+                    </a>
+                    <div>
+                        <h1 class="text-xl sm:text-2xl font-bold bg-gradient-to-r from-white via-gray-200 to-gray-400 bg-clip-text text-transparent">
+                            Iris Chat
+                        </h1>
+                        <p class="text-xs text-gray-500 hidden sm:block">Distributed AI Inference</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <div id="messages-counter" class="flex items-center space-x-2 px-3 py-1.5 bg-gray-800/50 rounded-full border border-gray-700/50">
+                        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+                        </svg>
+                        <span class="text-xs text-gray-400"><span id="messages-used">0</span>/<span id="messages-limit">1</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="relative flex-1 flex flex-col max-w-4xl w-full mx-auto px-4 sm:px-6 py-4">
+        <!-- Account Key Section -->
+        <div id="account-section" class="mb-4 bg-gradient-to-br from-gray-800/60 to-gray-900/60 rounded-2xl border border-gray-700/50 p-4">
+            <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                <div class="flex-1">
+                    <label for="account-key" class="block text-sm font-medium text-gray-300 mb-1">Account Key (optional)</label>
+                    <div class="flex items-center gap-2">
+                        <input
+                            type="text"
+                            id="account-key"
+                            placeholder="1234 5678 9012 3456"
+                            class="flex-1 px-4 py-2 bg-gray-900/50 border border-gray-700/50 rounded-xl text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500/50 font-mono"
+                        >
+                        <button
+                            id="verify-key-btn"
+                            class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium transition-colors"
+                        >
+                            Verify
+                        </button>
+                    </div>
+                </div>
+                <div id="account-status" class="hidden sm:flex items-center space-x-2 px-3 py-1.5 bg-gray-800/50 rounded-full">
+                    <span class="w-2 h-2 bg-gray-500 rounded-full"></span>
+                    <span class="text-xs text-gray-400">Not verified</span>
+                </div>
+            </div>
+            <p class="text-xs text-gray-500 mt-2">
+                Sin Account Key: 1 mensaje | Con Account Key: 3 mensajes
+            </p>
+        </div>
+
+        <!-- Chat Messages -->
+        <div id="chat-container" class="flex-1 bg-gradient-to-br from-gray-800/60 to-gray-900/60 rounded-2xl border border-gray-700/50 overflow-hidden flex flex-col min-h-[400px]">
+            <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
+                <!-- Welcome message -->
+                <div class="flex items-start space-x-3 message-fade-in">
+                    <div class="w-8 h-8 bg-gradient-to-br from-brand-500 to-purple-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                        <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                        </svg>
+                    </div>
+                    <div class="flex-1 bg-gray-800/50 rounded-2xl rounded-tl-md p-4">
+                        <p class="text-sm text-gray-300">
+                            Welcome to Iris Chat. I'm powered by a distributed network of AI nodes.
+                        </p>
+                        <p class="text-xs text-gray-500 mt-2">
+                            You can send <span id="welcome-limit">1 message</span>. Enter an Account Key to increase your limit to 3 messages.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="p-4 border-t border-gray-700/50">
+                <form id="chat-form" class="flex items-end gap-3">
+                    <div class="flex-1">
+                        <textarea
+                            id="message-input"
+                            placeholder="Type your message..."
+                            rows="1"
+                            class="w-full px-4 py-3 bg-gray-900/50 border border-gray-700/50 rounded-xl text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500/50 resize-none"
+                            style="min-height: 48px; max-height: 120px;"
+                        ></textarea>
+                    </div>
+                    <button
+                        type="submit"
+                        id="send-btn"
+                        class="px-6 py-3 bg-gradient-to-r from-brand-600 to-purple-600 hover:from-brand-500 hover:to-purple-500 text-white rounded-xl font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                    >
+                        <span>Send</span>
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                        </svg>
+                    </button>
+                </form>
+                <div id="limit-warning" class="hidden mt-2 text-xs text-amber-400">
+                    You have reached your message limit. Enter an Account Key for more messages.
+                </div>
+            </div>
+        </div>
+
+        <!-- Network Status -->
+        <div class="mt-4 flex items-center justify-center space-x-4 text-xs text-gray-500">
+            <div class="flex items-center space-x-1">
+                <span id="nodes-count" class="font-medium text-gray-400">{{ nodes_online }}</span>
+                <span>nodes online</span>
+            </div>
+            <span class="text-gray-700">|</span>
+            <a href="/dashboard" class="hover:text-brand-400 transition-colors">View Dashboard</a>
+        </div>
+    </main>
+
+    <script>
+        // State
+        let state = {
+            messagesUsed: 0,
+            messagesLimit: 1,
+            accountKey: null,
+            accountVerified: false,
+            isProcessing: false
+        };
+
+        // DOM Elements
+        const chatForm = document.getElementById('chat-form');
+        const messageInput = document.getElementById('message-input');
+        const chatMessages = document.getElementById('chat-messages');
+        const sendBtn = document.getElementById('send-btn');
+        const accountKeyInput = document.getElementById('account-key');
+        const verifyKeyBtn = document.getElementById('verify-key-btn');
+        const messagesUsed = document.getElementById('messages-used');
+        const messagesLimit = document.getElementById('messages-limit');
+        const limitWarning = document.getElementById('limit-warning');
+        const welcomeLimit = document.getElementById('welcome-limit');
+        const statusIndicator = document.getElementById('status-indicator');
+        const accountStatus = document.getElementById('account-status');
+
+        // Initialize from localStorage
+        function init() {
+            const savedState = localStorage.getItem('iris_chat_state');
+            if (savedState) {
+                const parsed = JSON.parse(savedState);
+                state.messagesUsed = parsed.messagesUsed || 0;
+                state.accountKey = parsed.accountKey || null;
+                state.accountVerified = parsed.accountVerified || false;
+                state.messagesLimit = state.accountVerified ? 3 : 1;
+
+                if (state.accountKey) {
+                    accountKeyInput.value = state.accountKey;
+                }
+                if (state.accountVerified) {
+                    updateAccountStatus(true);
+                }
+            }
+            updateUI();
+            checkNetworkStatus();
+        }
+
+        // Save state to localStorage
+        function saveState() {
+            localStorage.setItem('iris_chat_state', JSON.stringify({
+                messagesUsed: state.messagesUsed,
+                accountKey: state.accountKey,
+                accountVerified: state.accountVerified
+            }));
+        }
+
+        // Update UI
+        function updateUI() {
+            messagesUsed.textContent = state.messagesUsed;
+            messagesLimit.textContent = state.messagesLimit;
+            welcomeLimit.textContent = state.messagesLimit === 1 ? '1 message' : '3 messages';
+
+            const canSend = state.messagesUsed < state.messagesLimit && !state.isProcessing;
+            sendBtn.disabled = !canSend;
+            messageInput.disabled = !canSend;
+
+            if (state.messagesUsed >= state.messagesLimit) {
+                limitWarning.classList.remove('hidden');
+            } else {
+                limitWarning.classList.add('hidden');
+            }
+        }
+
+        // Check network status
+        async function checkNetworkStatus() {
+            try {
+                const response = await fetch('/health');
+                const data = await response.json();
+                if (data.nodes_connected > 0) {
+                    statusIndicator.className = 'absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 rounded-full border-2 border-gray-950 status-dot';
+                    document.getElementById('nodes-count').textContent = data.nodes_connected;
+                } else {
+                    statusIndicator.className = 'absolute -bottom-1 -right-1 w-4 h-4 bg-amber-500 rounded-full border-2 border-gray-950';
+                }
+            } catch (e) {
+                statusIndicator.className = 'absolute -bottom-1 -right-1 w-4 h-4 bg-red-500 rounded-full border-2 border-gray-950';
+            }
+        }
+
+        // Update account status display
+        function updateAccountStatus(verified) {
+            accountStatus.classList.remove('hidden');
+            if (verified) {
+                accountStatus.innerHTML = `
+                    <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                    <span class="text-xs text-green-400">Verified</span>
+                `;
+                state.messagesLimit = 3;
+            } else {
+                accountStatus.innerHTML = `
+                    <span class="w-2 h-2 bg-red-500 rounded-full"></span>
+                    <span class="text-xs text-red-400">Invalid</span>
+                `;
+                state.messagesLimit = 1;
+            }
+        }
+
+        // Verify account key
+        async function verifyAccountKey() {
+            const key = accountKeyInput.value.trim();
+            if (!key) return;
+
+            verifyKeyBtn.disabled = true;
+            verifyKeyBtn.textContent = 'Verifying...';
+
+            try {
+                const response = await fetch('/accounts/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ account_key: key })
+                });
+
+                if (response.ok) {
+                    state.accountKey = key;
+                    state.accountVerified = true;
+                    state.messagesLimit = 3;
+                    updateAccountStatus(true);
+                    addSystemMessage('Account verified! You now have 3 messages available.');
+                } else {
+                    state.accountVerified = false;
+                    state.messagesLimit = 1;
+                    updateAccountStatus(false);
+                    addSystemMessage('Invalid account key. You have 1 message available.');
+                }
+            } catch (e) {
+                addSystemMessage('Error verifying account key. Please try again.');
+            }
+
+            verifyKeyBtn.disabled = false;
+            verifyKeyBtn.textContent = 'Verify';
+            saveState();
+            updateUI();
+        }
+
+        // Add message to chat
+        function addMessage(content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex items-start space-x-3 message-fade-in ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`;
+
+            const avatar = isUser
+                ? `<div class="w-8 h-8 bg-gray-700 rounded-lg flex items-center justify-center flex-shrink-0">
+                       <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+                       </svg>
+                   </div>`
+                : `<div class="w-8 h-8 bg-gradient-to-br from-brand-500 to-purple-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                       <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                       </svg>
+                   </div>`;
+
+            const bubbleClass = isUser
+                ? 'bg-brand-600/30 rounded-2xl rounded-tr-md'
+                : 'bg-gray-800/50 rounded-2xl rounded-tl-md';
+
+            messageDiv.innerHTML = `
+                ${avatar}
+                <div class="flex-1 ${bubbleClass} p-4 max-w-[80%]">
+                    <p class="text-sm text-gray-300 whitespace-pre-wrap">${escapeHtml(content)}</p>
+                </div>
+            `;
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Add system message
+        function addSystemMessage(content) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'flex justify-center message-fade-in';
+            messageDiv.innerHTML = `
+                <div class="px-4 py-2 bg-gray-800/30 rounded-full">
+                    <p class="text-xs text-gray-500">${escapeHtml(content)}</p>
+                </div>
+            `;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Add typing indicator
+        function addTypingIndicator() {
+            const typingDiv = document.createElement('div');
+            typingDiv.id = 'typing-indicator';
+            typingDiv.className = 'flex items-start space-x-3 message-fade-in';
+            typingDiv.innerHTML = `
+                <div class="w-8 h-8 bg-gradient-to-br from-brand-500 to-purple-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                    </svg>
+                </div>
+                <div class="flex-1 bg-gray-800/50 rounded-2xl rounded-tl-md p-4 max-w-[80%]">
+                    <div class="typing-indicator flex space-x-1">
+                        <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
+                        <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
+                        <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
+                    </div>
+                </div>
+            `;
+            chatMessages.appendChild(typingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Remove typing indicator
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typing-indicator');
+            if (indicator) indicator.remove();
+        }
+
+        // Escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Send message
+        async function sendMessage(message) {
+            if (state.messagesUsed >= state.messagesLimit || state.isProcessing) return;
+
+            state.isProcessing = true;
+            updateUI();
+
+            addMessage(message, true);
+            addTypingIndicator();
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: message,
+                        account_key: state.accountKey
+                    })
+                });
+
+                removeTypingIndicator();
+
+                if (response.ok) {
+                    const data = await response.json();
+                    addMessage(data.response || 'No response received.');
+                    state.messagesUsed++;
+                } else if (response.status === 429) {
+                    addSystemMessage('You have reached your message limit.');
+                } else if (response.status === 503) {
+                    addSystemMessage('No nodes available. Please try again later.');
+                } else {
+                    const error = await response.json();
+                    addSystemMessage(error.detail || 'An error occurred. Please try again.');
+                }
+            } catch (e) {
+                removeTypingIndicator();
+                addSystemMessage('Network error. Please check your connection.');
+            }
+
+            state.isProcessing = false;
+            saveState();
+            updateUI();
+        }
+
+        // Event listeners
+        chatForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const message = messageInput.value.trim();
+            if (message) {
+                sendMessage(message);
+                messageInput.value = '';
+                messageInput.style.height = '48px';
+            }
+        });
+
+        verifyKeyBtn.addEventListener('click', verifyAccountKey);
+
+        accountKeyInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                verifyAccountKey();
+            }
+        });
+
+        // Auto-resize textarea
+        messageInput.addEventListener('input', function() {
+            this.style.height = '48px';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+
+        // Format account key input
+        accountKeyInput.addEventListener('input', function() {
+            let value = this.value.replace(/\D/g, '');
+            if (value.length > 16) value = value.slice(0, 16);
+
+            const formatted = value.match(/.{1,4}/g)?.join(' ') || '';
+            this.value = formatted;
+        });
+
+        // Initialize
+        init();
+
+        // Periodic status check
+        setInterval(checkNetworkStatus, 30000);
+    </script>
+</body>
+</html>
