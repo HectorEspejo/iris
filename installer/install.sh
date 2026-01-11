@@ -284,138 +284,95 @@ check_lmstudio() {
 }
 
 # =============================================================================
-# User Authentication
+# Account Key Setup
 # =============================================================================
 
-authenticate_user() {
-    print_step "Autenticación de usuario"
+ask_account_key() {
+    print_step "Account Setup"
     echo ""
-    echo -e "  ${CYAN}¿Ya tienes cuenta en Iris Network?${NC}"
-    echo -e "  ${BOLD}1)${NC} Sí, iniciar sesión"
-    echo -e "  ${BOLD}2)${NC} No, crear cuenta nueva"
+    echo -e "  ${CYAN}Do you have an Iris Account Key?${NC}"
+    echo -e "  ${BOLD}1)${NC} Yes, I have an Account Key"
+    echo -e "  ${BOLD}2)${NC} No, I need to generate one"
     echo ""
-    read -p "  Selecciona [1/2]: " auth_choice
+    read -p "  Select [1/2]: " choice
 
-    case "$auth_choice" in
-        1) login_user ;;
-        2) register_user ;;
+    case "$choice" in
+        1) input_account_key ;;
+        2) show_generate_instructions ;;
         *)
-            print_error "Opción inválida"
-            authenticate_user
+            print_error "Invalid option"
+            ask_account_key
             ;;
     esac
 }
 
-register_user() {
+input_account_key() {
     echo ""
-    print_info "Registro de nueva cuenta"
-    echo ""
+    read -p "  Enter your Account Key (16 digits): " input_key
 
-    read -p "  Email: " user_email
-    read -s -p "  Contraseña: " user_password
-    echo ""
-    read -s -p "  Confirmar contraseña: " user_password_confirm
-    echo ""
+    # Normalize (remove spaces and dashes)
+    ACCOUNT_KEY=$(echo "$input_key" | tr -d ' -')
 
-    if [ "$user_password" != "$user_password_confirm" ]; then
-        print_error "Las contraseñas no coinciden"
-        register_user
+    # Validate format (must be exactly 16 digits)
+    if ! [[ "$ACCOUNT_KEY" =~ ^[0-9]{16}$ ]]; then
+        print_error "Invalid format. Must be 16 digits."
+        input_account_key
         return
     fi
 
-    print_info "Registrando usuario..."
-
-    local response
-    response=$(curl -s -X POST "${COORDINATOR_URL}/auth/register" \
-        -H "Content-Type: application/json" \
-        -d "{\"email\": \"$user_email\", \"password\": \"$user_password\"}" 2>/dev/null)
-
-    if echo "$response" | grep -q '"id"'; then
-        print_success "Cuenta creada exitosamente"
-        USER_EMAIL="$user_email"
-        USER_PASSWORD="$user_password"
-        do_login
-    else
-        local error=$(echo "$response" | grep -o '"detail":"[^"]*"' | cut -d'"' -f4)
-        print_error "Error al registrar: ${error:-Error desconocido}"
-        echo ""
-        read -p "  ¿Intentar iniciar sesión en su lugar? [S/n]: " try_login
-        if [[ ! "$try_login" =~ ^[Nn]$ ]]; then
-            USER_EMAIL="$user_email"
-            USER_PASSWORD="$user_password"
-            do_login
-        else
-            exit 1
-        fi
-    fi
+    validate_account_key
 }
 
-login_user() {
-    echo ""
-    print_info "Inicio de sesión"
-    echo ""
-
-    read -p "  Email: " user_email
-    read -s -p "  Contraseña: " user_password
-    echo ""
-
-    USER_EMAIL="$user_email"
-    USER_PASSWORD="$user_password"
-    do_login
-}
-
-do_login() {
-    print_info "Iniciando sesión..."
+validate_account_key() {
+    print_info "Validating account key..."
 
     local response
-    response=$(curl -s -X POST "${COORDINATOR_URL}/auth/login" \
+    response=$(curl -s -X POST "${COORDINATOR_URL}/accounts/verify" \
         -H "Content-Type: application/json" \
-        -d "{\"email\": \"$USER_EMAIL\", \"password\": \"$USER_PASSWORD\"}" 2>/dev/null)
+        -d "{\"account_key\": \"$ACCOUNT_KEY\"}" 2>/dev/null)
 
-    if echo "$response" | grep -q '"access_token"'; then
-        AUTH_TOKEN=$(echo "$response" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
-
-        # Save token and credentials for TUI/CLI use
-        mkdir -p "$INSTALL_DIR"
-        echo "$AUTH_TOKEN" > "$INSTALL_DIR/token"
-        print_success "Sesión iniciada correctamente"
-        print_success "Token guardado en $INSTALL_DIR/token"
+    if echo "$response" | grep -q '"status":"active"'; then
+        local prefix=$(echo "$response" | grep -o '"account_key_prefix":"[^"]*"' | cut -d'"' -f4)
+        local nodes=$(echo "$response" | grep -o '"node_count":[0-9]*' | cut -d: -f2)
+        print_success "Account verified (${prefix} ****)"
+        print_info "Existing nodes: ${nodes:-0}"
     else
         local error=$(echo "$response" | grep -o '"detail":"[^"]*"' | cut -d'"' -f4)
-        print_error "Error al iniciar sesión: ${error:-Credenciales inválidas}"
+        print_error "Invalid or inactive account key: ${error:-Unknown error}"
         echo ""
-        read -p "  ¿Reintentar? [S/n]: " retry
+        read -p "  Try again? [Y/n]: " retry
         if [[ ! "$retry" =~ ^[Nn]$ ]]; then
-            login_user
+            input_account_key
         else
             exit 1
         fi
     fi
 }
 
-# =============================================================================
-# Token Generation
-# =============================================================================
+show_generate_instructions() {
+    echo ""
+    echo -e "  ${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${YELLOW}              Generate an Account Key First${NC}"
+    echo -e "  ${YELLOW}═══════════════════════════════════════════════════════════════${NC}"
+    echo ""
+    echo -e "  You need an Account Key to run a node. Generate one with:"
+    echo ""
+    echo -e "  ${BOLD}Option A - Using curl:${NC}"
+    echo -e "    curl -X POST ${COORDINATOR_URL}/accounts/generate"
+    echo ""
+    echo -e "  ${BOLD}Option B - Using the CLI:${NC}"
+    echo -e "    pip install iris-network"
+    echo -e "    iris account generate"
+    echo ""
+    echo -e "  ${RED}IMPORTANT: Save your Account Key! It will only be shown once.${NC}"
+    echo ""
 
-generate_enrollment_token() {
-    print_step "Generando token de enrollment..."
-
-    local node_label="node-$(hostname | tr '[:upper:]' '[:lower:]' | tr '.' '-' | cut -c1-15)-$(date +%s | tail -c 5)"
-
-    local response
-    response=$(curl -s -X POST "${COORDINATOR_URL}/admin/tokens/generate" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $AUTH_TOKEN" \
-        -d "{\"label\": \"$node_label\"}" 2>/dev/null)
-
-    if echo "$response" | grep -q '"token"'; then
-        ENROLLMENT_TOKEN=$(echo "$response" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
-        print_success "Token generado: ${node_label}"
-    else
-        local error=$(echo "$response" | grep -o '"detail":"[^"]*"' | cut -d'"' -f4)
-        print_error "Error al generar token: ${error:-Error desconocido}"
-        exit 1
+    read -p "  Press Enter after you have your key, or 'q' to quit: " action
+    if [ "$action" = "q" ]; then
+        exit 0
     fi
+
+    input_account_key
 }
 
 # =============================================================================
@@ -611,13 +568,16 @@ WRAPPER_EOF
 # =============================================================================
 
 configure_node() {
-    print_step "Configurando nodo..."
+    print_step "Configuring node..."
 
     # Generate node ID
     NODE_ID="node-$(hostname | tr '[:upper:]' '[:lower:]' | tr '.' '-' | cut -c1-20)-$(date +%s | tail -c 5)"
 
     # LM Studio URL
     LMSTUDIO_URL="${DETECTED_LMSTUDIO_URL:-http://localhost:1234/v1}"
+
+    # Format account key with spaces for readability
+    ACCOUNT_KEY_FORMATTED=$(echo "$ACCOUNT_KEY" | sed 's/.\{4\}/& /g' | sed 's/ $//')
 
     # Create config file
     cat > "$INSTALL_DIR/config.yaml" << EOF
@@ -627,12 +587,12 @@ configure_node() {
 node_id: "$NODE_ID"
 coordinator_url: "$COORDINATOR_WS"
 lmstudio_url: "$LMSTUDIO_URL"
-enrollment_token: "$ENROLLMENT_TOKEN"
+account_key: "$ACCOUNT_KEY_FORMATTED"
 data_dir: "$INSTALL_DIR/data"
 log_dir: "$INSTALL_DIR/logs"
 EOF
 
-    print_success "Configuración guardada en $INSTALL_DIR/config.yaml"
+    print_success "Configuration saved to $INSTALL_DIR/config.yaml"
     print_success "Node ID: $NODE_ID"
 }
 
@@ -675,6 +635,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=$USER
+Environment="IRIS_ACCOUNT_KEY=$ACCOUNT_KEY"
+Environment="COORDINATOR_URL=$COORDINATOR_WS"
+Environment="LMSTUDIO_URL=$LMSTUDIO_URL"
 ExecStart=$INSTALL_DIR/bin/$BIN_NAME --config $INSTALL_DIR/config.yaml
 Restart=always
 RestartSec=10
@@ -713,6 +676,15 @@ install_launchd_service() {
         <string>--config</string>
         <string>$INSTALL_DIR/config.yaml</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>IRIS_ACCOUNT_KEY</key>
+        <string>$ACCOUNT_KEY</string>
+        <key>COORDINATOR_URL</key>
+        <string>$COORDINATOR_WS</string>
+        <key>LMSTUDIO_URL</key>
+        <string>$LMSTUDIO_URL</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -951,13 +923,17 @@ main() {
     if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
         echo "Iris Network - Node Agent Installer"
         echo ""
-        echo "Uso: $0 [opciones]"
+        echo "Usage: $0 [options]"
         echo ""
-        echo "Opciones:"
-        echo "  -h, --help      Mostrar esta ayuda"
-        echo "  --token TOKEN   Usar token de enrollment existente"
-        echo "  --no-service    No instalar como servicio"
-        echo "  --uninstall     Desinstalar completamente (elimina todos los datos)"
+        echo "Options:"
+        echo "  -h, --help              Show this help"
+        echo "  --account-key KEY       Use existing account key (16 digits)"
+        echo "  --no-service            Don't install as system service"
+        echo "  --uninstall             Completely uninstall (removes all data)"
+        echo ""
+        echo "Examples:"
+        echo "  $0"
+        echo "  $0 --account-key \"7294 8156 3047 9821\""
         echo ""
         exit 0
     fi
@@ -970,9 +946,8 @@ main() {
     # Parse arguments
     while [ $# -gt 0 ]; do
         case "$1" in
-            --token)
-                ENROLLMENT_TOKEN="$2"
-                SKIP_AUTH=true
+            --account-key)
+                ACCOUNT_KEY=$(echo "$2" | tr -d ' -')
                 shift 2
                 ;;
             --no-service)
@@ -1002,13 +977,12 @@ main() {
     # Step 4: Check LM Studio
     check_lmstudio
 
-    # Step 5: Authentication (if no token provided)
-    if [ -z "$ENROLLMENT_TOKEN" ]; then
-        authenticate_user
-        generate_enrollment_token
+    # Step 5: Account Key setup
+    if [ -z "$ACCOUNT_KEY" ]; then
+        ask_account_key
     else
-        print_step "Usando token proporcionado"
-        print_success "Token: ${ENROLLMENT_TOKEN:0:20}..."
+        print_step "Using provided account key"
+        validate_account_key
     fi
 
     # Step 6: Download binary

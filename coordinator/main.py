@@ -21,6 +21,9 @@ from shared.models import (
     InferenceRequest,
     InferenceResponse,
     TaskStatus,
+    AccountCreateResponse,
+    AccountInfo,
+    AccountWithNodes,
 )
 from shared.protocol import MessageType, ProtocolMessage
 
@@ -29,6 +32,8 @@ from .auth import register_user, login_user, get_current_user, get_user_info
 from .crypto import coordinator_crypto
 from .node_registry import node_registry
 from .node_tokens import NodeTokenManager, TokenValidationResult
+from .account_service import account_service
+from .accounts import AccountKeyGenerator
 
 # Configure structured logging
 structlog.configure(
@@ -135,6 +140,129 @@ async def api_login(credentials: UserLogin):
 async def api_me(user: User = Depends(get_current_user)):
     """Get current user information."""
     return await get_user_info(user)
+
+
+# =============================================================================
+# Account Endpoints (Mullvad-style)
+# =============================================================================
+
+@app.post("/accounts/generate", response_model=AccountCreateResponse)
+async def api_generate_account():
+    """
+    Generate a new Account Key.
+
+    This is the ONLY time the full Account Key will be shown.
+    The user MUST save it securely.
+    """
+    return await account_service.create_account()
+
+
+class AccountKeyHeader(PydanticBaseModel):
+    """Request model for account key validation."""
+    account_key: str
+
+
+@app.post("/accounts/verify", response_model=AccountInfo)
+async def api_verify_account(request: AccountKeyHeader):
+    """
+    Verify an Account Key and return account information.
+
+    Used by nodes to validate their account key before registering.
+    """
+    account_info = await account_service.get_account_by_key(request.account_key)
+    if not account_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive account key"
+        )
+    return account_info
+
+
+@app.get("/accounts/me", response_model=AccountInfo)
+async def api_get_my_account(account_key: str):
+    """
+    Get account information.
+
+    Pass account_key as query parameter.
+    """
+    account_info = await account_service.get_account_by_key(account_key)
+    if not account_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive account key"
+        )
+    return account_info
+
+
+@app.get("/accounts/nodes")
+async def api_get_account_nodes(account_key: str):
+    """
+    Get all nodes linked to an account.
+
+    Pass account_key as query parameter.
+    """
+    nodes = await account_service.get_account_nodes(account_key)
+    if nodes is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive account key"
+        )
+    return nodes
+
+
+@app.get("/accounts/full", response_model=AccountWithNodes)
+async def api_get_account_with_nodes(account_key: str):
+    """
+    Get account with all linked nodes and stats.
+
+    Pass account_key as query parameter.
+    """
+    account_with_nodes = await account_service.get_account_with_nodes(account_key)
+    if not account_with_nodes:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or inactive account key"
+        )
+    return account_with_nodes
+
+
+# Admin endpoints for account management
+@app.get("/admin/accounts", response_model=list[AccountInfo])
+async def api_list_accounts(user: User = Depends(get_current_user)):
+    """
+    List all accounts (admin only).
+
+    Requires authentication.
+    """
+    return await account_service.get_all_accounts()
+
+
+@app.post("/admin/accounts/{account_id}/suspend")
+async def api_suspend_account(
+    account_id: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Suspend an account (admin only).
+
+    Requires authentication.
+    """
+    success = await account_service.suspend_account(account_id)
+    return {"success": success, "message": f"Account {account_id} suspended"}
+
+
+@app.post("/admin/accounts/{account_id}/reactivate")
+async def api_reactivate_account(
+    account_id: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Reactivate a suspended account (admin only).
+
+    Requires authentication.
+    """
+    success = await account_service.reactivate_account(account_id)
+    return {"success": success, "message": f"Account {account_id} reactivated"}
 
 
 # =============================================================================

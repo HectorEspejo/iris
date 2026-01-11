@@ -69,13 +69,15 @@ class NodeAgent:
         coordinator_url: str = "ws://168.119.10.189:8000/nodes/connect",
         lmstudio_url: str = "http://localhost:1234/v1",
         key_path: str = "data/node.key",
-        enrollment_token: Optional[str] = None
+        account_key: Optional[str] = None,
+        enrollment_token: Optional[str] = None  # Deprecated, use account_key
     ):
         self.node_id = node_id
         self.coordinator_url = coordinator_url
         self.lmstudio_url = lmstudio_url
         self.key_path = key_path
-        self.enrollment_token = enrollment_token
+        self.account_key = account_key
+        self.enrollment_token = enrollment_token  # Deprecated
 
         self._ws = None  # WebSocket connection
         self._lm_client: Optional[LMStudioClient] = None
@@ -228,7 +230,8 @@ class NodeAgent:
             NodeRegisterPayload(
                 node_id=self.node_id,
                 public_key=node_crypto.public_key,
-                enrollment_token=self.enrollment_token,  # Required for new nodes
+                account_key=self.account_key,  # Mullvad-style account key
+                enrollment_token=self.enrollment_token,  # Deprecated, for backwards compatibility
                 lmstudio_port=int(self.lmstudio_url.split(":")[-1].split("/")[0]),
                 model_name=model_name,
                 max_context=8192,  # TODO: Get from LM Studio
@@ -450,13 +453,35 @@ async def main():
         "NODE_KEY_PATH",
         "data/node.key"
     )
+
+    # Mullvad-style account key (primary authentication)
+    account_key = os.environ.get("IRIS_ACCOUNT_KEY")
+
+    # Deprecated: enrollment token (for backwards compatibility)
     enrollment_token = os.environ.get("ENROLLMENT_TOKEN")
+
+    # Validate that at least one authentication method is provided
+    if not account_key and not enrollment_token:
+        logger.error(
+            "no_authentication_provided",
+            message="IRIS_ACCOUNT_KEY environment variable is required"
+        )
+        print("\n" + "="*60)
+        print("ERROR: Account key required")
+        print("="*60)
+        print("\nTo run a node, you need an account key.")
+        print("Generate one with: iris account generate")
+        print("\nThen set the environment variable:")
+        print('  export IRIS_ACCOUNT_KEY="1234 5678 9012 3456"')
+        print("="*60 + "\n")
+        sys.exit(1)
 
     agent = NodeAgent(
         node_id=node_id,
         coordinator_url=coordinator_url,
         lmstudio_url=lmstudio_url,
         key_path=key_path,
+        account_key=account_key,
         enrollment_token=enrollment_token
     )
 

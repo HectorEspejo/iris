@@ -15,7 +15,18 @@ logger = structlog.get_logger()
 
 # SQL Schema
 SCHEMA = """
--- Users of the club
+-- Accounts for node operators (Mullvad-style)
+CREATE TABLE IF NOT EXISTS accounts (
+    id TEXT PRIMARY KEY,
+    account_key_hash TEXT UNIQUE NOT NULL,
+    account_key_prefix TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'active',
+    total_earnings REAL DEFAULT 0.0,
+    last_activity_at TIMESTAMP
+);
+
+-- Users of the club (admin only - legacy)
 CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
@@ -30,6 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
     owner_id TEXT REFERENCES users(id),
+    account_id TEXT REFERENCES accounts(id),
     public_key TEXT NOT NULL,
     model_name TEXT,
     max_context INTEGER,
@@ -125,6 +137,9 @@ CREATE TABLE IF NOT EXISTS node_tokens (
 );
 
 -- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_accounts_key_hash ON accounts(account_key_hash);
+CREATE INDEX IF NOT EXISTS idx_accounts_prefix ON accounts(account_key_prefix);
+CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id);
@@ -160,6 +175,21 @@ MIGRATIONS = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_node_tokens_hash ON node_tokens(token_hash)",
     "CREATE INDEX IF NOT EXISTS idx_node_tokens_node ON node_tokens(used_by_node_id)",
+    # Add accounts table (Mullvad-style account keys)
+    """CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        account_key_hash TEXT UNIQUE NOT NULL,
+        account_key_prefix TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status TEXT DEFAULT 'active',
+        total_earnings REAL DEFAULT 0.0,
+        last_activity_at TIMESTAMP
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_accounts_key_hash ON accounts(account_key_hash)",
+    "CREATE INDEX IF NOT EXISTS idx_accounts_prefix ON accounts(account_key_prefix)",
+    # Add account_id to nodes table
+    "ALTER TABLE nodes ADD COLUMN account_id TEXT REFERENCES accounts(id)",
+    "CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id)",
 ]
 
 
@@ -632,6 +662,105 @@ class Database:
         await self.conn.execute(
             "UPDATE economic_periods SET distributed = TRUE, distributed_at = ? WHERE id = ?",
             (datetime.utcnow(), period_id)
+        )
+        await self.conn.commit()
+
+    # =========================================================================
+    # Account Operations (Mullvad-style)
+    # =========================================================================
+
+    async def create_account(
+        self,
+        id: str,
+        account_key_hash: str,
+        account_key_prefix: str
+    ) -> dict[str, Any]:
+        """Create a new account."""
+        await self.conn.execute(
+            """
+            INSERT INTO accounts (id, account_key_hash, account_key_prefix)
+            VALUES (?, ?, ?)
+            """,
+            (id, account_key_hash, account_key_prefix)
+        )
+        await self.conn.commit()
+        return await self.get_account_by_id(id)
+
+    async def get_account_by_id(self, account_id: str) -> Optional[dict[str, Any]]:
+        """Get account by ID."""
+        async with self.conn.execute(
+            "SELECT * FROM accounts WHERE id = ?", (account_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_account_by_key_hash(self, key_hash: str) -> Optional[dict[str, Any]]:
+        """Get account by account key hash."""
+        async with self.conn.execute(
+            "SELECT * FROM accounts WHERE account_key_hash = ?", (key_hash,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_account_nodes(self, account_id: str) -> list[dict[str, Any]]:
+        """Get all nodes belonging to an account."""
+        async with self.conn.execute(
+            "SELECT * FROM nodes WHERE account_id = ? ORDER BY created_at DESC",
+            (account_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_account_node_count(self, account_id: str) -> int:
+        """Get count of nodes for an account."""
+        async with self.conn.execute(
+            "SELECT COUNT(*) as count FROM nodes WHERE account_id = ?",
+            (account_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row["count"]
+
+    async def update_account_status(self, account_id: str, status: str) -> None:
+        """Update account status."""
+        await self.conn.execute(
+            "UPDATE accounts SET status = ? WHERE id = ?",
+            (status, account_id)
+        )
+        await self.conn.commit()
+
+    async def update_account_activity(self, account_id: str) -> None:
+        """Update account's last activity timestamp."""
+        await self.conn.execute(
+            "UPDATE accounts SET last_activity_at = ? WHERE id = ?",
+            (datetime.utcnow(), account_id)
+        )
+        await self.conn.commit()
+
+    async def update_account_earnings(
+        self,
+        account_id: str,
+        amount: float
+    ) -> None:
+        """Add to account's total earnings."""
+        await self.conn.execute(
+            "UPDATE accounts SET total_earnings = total_earnings + ? WHERE id = ?",
+            (amount, account_id)
+        )
+        await self.conn.commit()
+
+    async def get_all_accounts(self) -> list[dict[str, Any]]:
+        """Get all accounts."""
+        async with self.conn.execute(
+            "SELECT * FROM accounts ORDER BY created_at DESC"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def link_node_to_account(self, node_id: str, account_id: str) -> None:
+        """Link a node to an account."""
+        await self.conn.execute(
+            "UPDATE nodes SET account_id = ? WHERE id = ?",
+            (account_id, node_id)
         )
         await self.conn.commit()
 

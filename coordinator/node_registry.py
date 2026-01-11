@@ -25,6 +25,7 @@ from shared.protocol import (
 from .database import db
 from .crypto import coordinator_crypto
 from .node_tokens import NodeTokenManager
+from .accounts import AccountKeyGenerator
 
 logger = structlog.get_logger()
 
@@ -170,6 +171,10 @@ class NodeRegistry:
         """
         Handle NODE_REGISTER message.
 
+        Authentication priority:
+        1. Account Key (Mullvad-style) - preferred
+        2. Enrollment Token (deprecated, for backwards compatibility)
+
         Args:
             websocket: The WebSocket connection
             message: The registration message
@@ -179,9 +184,77 @@ class NodeRegistry:
         """
         try:
             payload = parse_payload(message, NodeRegisterPayload)
+            account_id: Optional[str] = None
 
-            # Check enrollment token if token manager is configured
-            if self._token_manager:
+            # === Account Key Authentication (Primary) ===
+            if payload.account_key:
+                # Validate account key format
+                if not AccountKeyGenerator.validate_format(payload.account_key):
+                    logger.warning(
+                        "node_registration_invalid_account_key_format",
+                        node_id=payload.node_id
+                    )
+                    ack = ProtocolMessage.create(
+                        MessageType.REGISTER_ACK,
+                        RegisterAckPayload(
+                            success=False,
+                            coordinator_public_key="",
+                            message="Invalid account key format"
+                        )
+                    )
+                    await websocket.send_text(ack.to_json())
+                    return None
+
+                # Look up account by key hash
+                key_hash = AccountKeyGenerator.hash_key(payload.account_key)
+                account = await db.get_account_by_key_hash(key_hash)
+
+                if not account:
+                    logger.warning(
+                        "node_registration_account_not_found",
+                        node_id=payload.node_id,
+                        key_prefix=AccountKeyGenerator.get_prefix(payload.account_key)
+                    )
+                    ack = ProtocolMessage.create(
+                        MessageType.REGISTER_ACK,
+                        RegisterAckPayload(
+                            success=False,
+                            coordinator_public_key="",
+                            message="Account not found. Generate an account first with: iris account generate"
+                        )
+                    )
+                    await websocket.send_text(ack.to_json())
+                    return None
+
+                if account["status"] != "active":
+                    logger.warning(
+                        "node_registration_account_inactive",
+                        node_id=payload.node_id,
+                        status=account["status"]
+                    )
+                    ack = ProtocolMessage.create(
+                        MessageType.REGISTER_ACK,
+                        RegisterAckPayload(
+                            success=False,
+                            coordinator_public_key="",
+                            message=f"Account is {account['status']}"
+                        )
+                    )
+                    await websocket.send_text(ack.to_json())
+                    return None
+
+                account_id = account["id"]
+                logger.info(
+                    "node_authenticated_with_account",
+                    node_id=payload.node_id,
+                    account_prefix=account["account_key_prefix"]
+                )
+
+                # Update account activity
+                await db.update_account_activity(account_id)
+
+            # === Enrollment Token Authentication (Deprecated fallback) ===
+            elif self._token_manager:
                 # Check if this node was already enrolled
                 is_enrolled = await self._token_manager.is_node_enrolled(payload.node_id)
 
@@ -189,16 +262,15 @@ class NodeRegistry:
                     # New node - must provide valid enrollment token
                     if not payload.enrollment_token:
                         logger.warning(
-                            "node_registration_no_token",
+                            "node_registration_no_credentials",
                             node_id=payload.node_id
                         )
-                        # Send failure acknowledgment
                         ack = ProtocolMessage.create(
                             MessageType.REGISTER_ACK,
                             RegisterAckPayload(
                                 success=False,
                                 coordinator_public_key="",
-                                message="Enrollment token required for new nodes"
+                                message="Account key required. Generate an account with: iris account generate"
                             )
                         )
                         await websocket.send_text(ack.to_json())
@@ -212,7 +284,6 @@ class NodeRegistry:
                             node_id=payload.node_id,
                             error=validation.error
                         )
-                        # Send failure acknowledgment
                         ack = ProtocolMessage.create(
                             MessageType.REGISTER_ACK,
                             RegisterAckPayload(
@@ -246,7 +317,7 @@ class NodeRegistry:
                         return None
 
                     logger.info(
-                        "node_enrolled_with_token",
+                        "node_enrolled_with_token_deprecated",
                         node_id=payload.node_id,
                         token_id=validation.token_id
                     )
@@ -271,7 +342,7 @@ class NodeRegistry:
                 # Create/update node in database with extended capabilities
                 await db.create_node(
                     id=payload.node_id,
-                    owner_id=payload.node_id,  # For MVP, node_id is owner_id
+                    owner_id=payload.node_id,  # Legacy field
                     public_key=payload.public_key,
                     model_name=payload.model_name,
                     max_context=payload.max_context,
@@ -283,6 +354,10 @@ class NodeRegistry:
                     tokens_per_second=payload.tokens_per_second,
                     node_tier=node_tier.value
                 )
+
+                # Link node to account if authenticated via account_key
+                if account_id:
+                    await db.link_node_to_account(payload.node_id, account_id)
 
                 # Add to connected nodes with extended capabilities
                 self._nodes[payload.node_id] = ConnectedNode(
@@ -316,7 +391,8 @@ class NodeRegistry:
                 vram=payload.vram_gb,
                 gpu=payload.gpu_name,
                 params_b=payload.model_params,
-                tier=node_tier.value
+                tier=node_tier.value,
+                account_id=account_id
             )
             return payload.node_id
 

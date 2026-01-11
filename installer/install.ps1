@@ -10,7 +10,7 @@
 # =============================================================================
 
 param(
-    [string]$EnrollmentToken,
+    [string]$AccountKey,
     [string]$LMStudioUrl = "http://localhost:1234/v1",
     [switch]$NoService,
     [switch]$Uninstall,
@@ -93,7 +93,7 @@ function Show-Help {
     Write-Host "Usage: install.ps1 [options]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -EnrollmentToken <token>  Use existing enrollment token (skip auth)"
+    Write-Host "  -AccountKey <key>         Use existing account key (16 digits)"
     Write-Host "  -LMStudioUrl <url>        LM Studio URL (default: http://localhost:1234/v1)"
     Write-Host "  -NoService                Skip Windows Service installation"
     Write-Host "  -Uninstall                Completely uninstall (removes all data)"
@@ -101,7 +101,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\install.ps1"
-    Write-Host "  .\install.ps1 -EnrollmentToken 'iris_v1.eyJ...'"
+    Write-Host "  .\install.ps1 -AccountKey '7294 8156 3047 9821'"
     Write-Host "  .\install.ps1 -Uninstall"
     Write-Host ""
     exit 0
@@ -172,6 +172,14 @@ function Uninstall-Node {
         $NewPath = ($CurrentPath -split ";" | Where-Object { $_ -ne $BinPath }) -join ";"
         [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
         Write-Success "PATH cleaned"
+    }
+
+    # Remove TUI directory
+    $TuiDir = "$InstallDir\tui"
+    if (Test-Path $TuiDir) {
+        Write-Info "Removing TUI directory..."
+        Remove-Item -Path $TuiDir -Recurse -Force
+        Write-Success "TUI directory removed"
     }
 
     # Remove installation directory
@@ -270,125 +278,177 @@ function Test-LMStudio {
 }
 
 # =============================================================================
-# User Authentication
+# Node.js Check
 # =============================================================================
 
-function Invoke-UserAuthentication {
-    Write-Step "User authentication"
+function Test-NodeJS {
+    Write-Step "Checking Node.js..."
+
+    $script:NodeJSAvailable = $false
+
+    # Check if node is in PATH
+    $NodePath = Get-Command node -ErrorAction SilentlyContinue
+
+    if ($NodePath) {
+        try {
+            $NodeVersion = & node --version 2>$null
+            $MajorVersion = [int]($NodeVersion -replace 'v(\d+)\..*', '$1')
+
+            if ($MajorVersion -ge 16) {
+                Write-Success "Node.js $NodeVersion detected"
+                $script:NodeJSAvailable = $true
+                return $true
+            }
+            else {
+                Write-Warning "Node.js $NodeVersion is too old (v16+ required)"
+            }
+        }
+        catch {
+            Write-Warning "Could not determine Node.js version"
+        }
+    }
+
+    Write-Warning "Node.js not detected"
     Write-Host ""
-    Write-Host "  ${Cyan}Do you have an Iris Network account?${Reset}"
-    Write-Host "  ${Bold}1)${Reset} Yes, sign in"
-    Write-Host "  ${Bold}2)${Reset} No, create new account"
+    Write-Host "  ${Yellow}Node.js is required for the dashboard (TUI).${Reset}"
+    Write-Host "  ${Cyan}Installation options:${Reset}"
+    Write-Host ""
+    Write-Host "  ${Bold}Option 1 - winget (recommended):${Reset}"
+    Write-Host "    winget install OpenJS.NodeJS.LTS"
+    Write-Host ""
+    Write-Host "  ${Bold}Option 2 - Download from website:${Reset}"
+    Write-Host "    https://nodejs.org/en/download/"
+    Write-Host ""
+    Write-Host "  ${Bold}Option 3 - Chocolatey:${Reset}"
+    Write-Host "    choco install nodejs-lts"
+    Write-Host ""
+
+    $InstallNode = Read-Host "  Try to install Node.js automatically? [Y/n]"
+    if ($InstallNode -notmatch "^[Nn]$") {
+        Install-NodeJS
+    }
+    else {
+        Write-Warning "TUI will not be available without Node.js"
+        $script:NodeJSAvailable = $false
+    }
+}
+
+function Install-NodeJS {
+    Write-Info "Installing Node.js..."
+
+    # Try winget first
+    $Winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($Winget) {
+        Write-Info "Installing via winget..."
+        try {
+            & winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements
+            # Refresh PATH
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+            $NodeCheck = Get-Command node -ErrorAction SilentlyContinue
+            if ($NodeCheck) {
+                Write-Success "Node.js installed via winget"
+                $script:NodeJSAvailable = $true
+                return
+            }
+        }
+        catch {
+            Write-Warning "winget installation failed"
+        }
+    }
+
+    # Try chocolatey
+    $Choco = Get-Command choco -ErrorAction SilentlyContinue
+    if ($Choco) {
+        Write-Info "Installing via Chocolatey..."
+        try {
+            & choco install nodejs-lts -y
+            # Refresh PATH
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+            $NodeCheck = Get-Command node -ErrorAction SilentlyContinue
+            if ($NodeCheck) {
+                Write-Success "Node.js installed via Chocolatey"
+                $script:NodeJSAvailable = $true
+                return
+            }
+        }
+        catch {
+            Write-Warning "Chocolatey installation failed"
+        }
+    }
+
+    Write-Error "Could not install Node.js automatically"
+    Write-Info "Please install manually from https://nodejs.org"
+    $script:NodeJSAvailable = $false
+}
+
+# =============================================================================
+# Account Key Setup
+# =============================================================================
+
+function Get-AccountKey {
+    Write-Step "Account Setup"
+    Write-Host ""
+    Write-Host "  ${Cyan}Do you have an Iris Account Key?${Reset}"
+    Write-Host "  ${Bold}1)${Reset} Yes, I have an Account Key"
+    Write-Host "  ${Bold}2)${Reset} No, I need to generate one"
     Write-Host ""
 
     $Choice = Read-Host "  Select [1/2]"
 
     switch ($Choice) {
-        "1" { Invoke-Login }
-        "2" { Invoke-Register }
+        "1" { Request-AccountKey }
+        "2" { Show-GenerateInstructions }
         default {
             Write-Error "Invalid option"
-            Invoke-UserAuthentication
+            Get-AccountKey
         }
     }
 }
 
-function Invoke-Register {
+function Request-AccountKey {
     Write-Host ""
-    Write-Info "New account registration"
-    Write-Host ""
+    $Key = Read-Host "  Enter your Account Key (16 digits)"
 
-    $script:UserEmail = Read-Host "  Email"
-    $SecurePassword = Read-Host "  Password" -AsSecureString
-    $SecurePasswordConfirm = Read-Host "  Confirm password" -AsSecureString
+    # Normalize (remove spaces and dashes)
+    $script:AccountKey = $Key -replace '[\s-]', ''
 
-    # Convert SecureString to plain text for comparison and API
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
-    $script:UserPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-
-    $BSTR2 = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePasswordConfirm)
-    $PasswordConfirm = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR2)
-
-    if ($script:UserPassword -ne $PasswordConfirm) {
-        Write-Error "Passwords do not match"
-        Invoke-Register
+    # Validate format (must be exactly 16 digits)
+    if ($script:AccountKey -notmatch '^\d{16}$') {
+        Write-Error "Invalid format. Must be 16 digits."
+        Request-AccountKey
         return
     }
 
-    Write-Info "Registering user..."
+    Test-AccountKey
+}
+
+function Test-AccountKey {
+    Write-Info "Validating account key..."
 
     try {
-        $Body = @{
-            email = $script:UserEmail
-            password = $script:UserPassword
-        } | ConvertTo-Json
-
-        $Response = Invoke-RestMethod -Uri "${CoordinatorUrl}/auth/register" `
+        $Body = @{ account_key = $script:AccountKey } | ConvertTo-Json
+        $Response = Invoke-RestMethod -Uri "${CoordinatorUrl}/accounts/verify" `
             -Method Post `
             -Body $Body `
             -ContentType "application/json" `
             -ErrorAction Stop
 
-        Write-Success "Account created successfully"
-        Invoke-DoLogin
+        $Prefix = $Response.account_key_prefix
+        $NodeCount = $Response.node_count
+        Write-Success "Account verified (${Prefix} ****)"
+        Write-Info "Existing nodes: $NodeCount"
     }
     catch {
         $ErrorDetail = $_.ErrorDetails.Message | ConvertFrom-Json -ErrorAction SilentlyContinue
-        $ErrorMsg = if ($ErrorDetail.detail) { $ErrorDetail.detail } else { "Unknown error" }
-        Write-Error "Registration error: $ErrorMsg"
+        $ErrorMsg = if ($ErrorDetail.detail) { $ErrorDetail.detail } else { "Invalid or inactive account key" }
+        Write-Error "Account key error: $ErrorMsg"
         Write-Host ""
 
-        $TryLogin = Read-Host "  Try signing in instead? [Y/n]"
-        if ($TryLogin -notmatch "^[Nn]$") {
-            Invoke-DoLogin
-        }
-        else {
-            exit 1
-        }
-    }
-}
-
-function Invoke-Login {
-    Write-Host ""
-    Write-Info "Sign in"
-    Write-Host ""
-
-    $script:UserEmail = Read-Host "  Email"
-    $SecurePassword = Read-Host "  Password" -AsSecureString
-
-    $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
-    $script:UserPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
-
-    Invoke-DoLogin
-}
-
-function Invoke-DoLogin {
-    Write-Info "Signing in..."
-
-    try {
-        $Body = @{
-            email = $script:UserEmail
-            password = $script:UserPassword
-        } | ConvertTo-Json
-
-        $Response = Invoke-RestMethod -Uri "${CoordinatorUrl}/auth/login" `
-            -Method Post `
-            -Body $Body `
-            -ContentType "application/json" `
-            -ErrorAction Stop
-
-        $script:AuthToken = $Response.access_token
-        Write-Success "Signed in successfully"
-    }
-    catch {
-        $ErrorDetail = $_.ErrorDetails.Message | ConvertFrom-Json -ErrorAction SilentlyContinue
-        $ErrorMsg = if ($ErrorDetail.detail) { $ErrorDetail.detail } else { "Invalid credentials" }
-        Write-Error "Sign in error: $ErrorMsg"
-        Write-Host ""
-
-        $Retry = Read-Host "  Retry? [Y/n]"
+        $Retry = Read-Host "  Try again? [Y/n]"
         if ($Retry -notmatch "^[Nn]$") {
-            Invoke-Login
+            Request-AccountKey
         }
         else {
             exit 1
@@ -396,40 +456,30 @@ function Invoke-DoLogin {
     }
 }
 
-# =============================================================================
-# Token Generation
-# =============================================================================
+function Show-GenerateInstructions {
+    Write-Host ""
+    Write-Host "  ${Yellow}===============================================================${Reset}"
+    Write-Host "  ${Yellow}              Generate an Account Key First${Reset}"
+    Write-Host "  ${Yellow}===============================================================${Reset}"
+    Write-Host ""
+    Write-Host "  You need an Account Key to run a node. Generate one with:"
+    Write-Host ""
+    Write-Host "  ${Bold}Option A - Using PowerShell:${Reset}"
+    Write-Host "    Invoke-RestMethod -Uri '${CoordinatorUrl}/accounts/generate' -Method Post"
+    Write-Host ""
+    Write-Host "  ${Bold}Option B - Using the CLI:${Reset}"
+    Write-Host "    pip install iris-network"
+    Write-Host "    iris account generate"
+    Write-Host ""
+    Write-Host "  ${Red}IMPORTANT: Save your Account Key! It will only be shown once.${Reset}"
+    Write-Host ""
 
-function New-EnrollmentToken {
-    Write-Step "Generating enrollment token..."
-
-    $NodeLabel = "node-$($env:COMPUTERNAME.ToLower())-$(Get-Date -Format 'MMddHHmm')"
-
-    try {
-        $Body = @{
-            label = $NodeLabel
-        } | ConvertTo-Json
-
-        $Headers = @{
-            "Authorization" = "Bearer $script:AuthToken"
-        }
-
-        $Response = Invoke-RestMethod -Uri "${CoordinatorUrl}/admin/tokens/generate" `
-            -Method Post `
-            -Body $Body `
-            -ContentType "application/json" `
-            -Headers $Headers `
-            -ErrorAction Stop
-
-        $script:EnrollToken = $Response.token
-        Write-Success "Token generated: $NodeLabel"
+    $Action = Read-Host "  Press Enter after you have your key, or 'q' to quit"
+    if ($Action -eq 'q') {
+        exit 0
     }
-    catch {
-        $ErrorDetail = $_.ErrorDetails.Message | ConvertFrom-Json -ErrorAction SilentlyContinue
-        $ErrorMsg = if ($ErrorDetail.detail) { $ErrorDetail.detail } else { "Unknown error" }
-        Write-Error "Token generation error: $ErrorMsg"
-        exit 1
-    }
+
+    Request-AccountKey
 }
 
 # =============================================================================
@@ -461,6 +511,152 @@ function Get-Binary {
 }
 
 # =============================================================================
+# Node.js TUI Installation
+# =============================================================================
+
+function Install-NodeJSTUI {
+    Write-Step "Installing dashboard (TUI)..."
+
+    if (-not $script:NodeJSAvailable) {
+        Write-Warning "Node.js not available, skipping TUI installation"
+        return
+    }
+
+    $TuiDir = "$InstallDir\tui"
+    New-Item -ItemType Directory -Force -Path $TuiDir | Out-Null
+
+    # Check if source exists locally (for development)
+    $TuiSource = "$env:USERPROFILE\Documents\clubai\client\tui-node"
+
+    if (Test-Path $TuiSource) {
+        Write-Info "Copying TUI from local source..."
+        Copy-Item -Path "$TuiSource\src" -Destination $TuiDir -Recurse -Force
+        Copy-Item -Path "$TuiSource\package.json" -Destination $TuiDir -Force
+    }
+    else {
+        Write-Info "Downloading TUI from server..."
+        $TuiUrl = "${CoordinatorUrl}/downloads/tui-node.zip"
+        $TuiZip = "$env:TEMP\tui-node.zip"
+
+        try {
+            Invoke-WebRequest -Uri $TuiUrl -OutFile $TuiZip -UseBasicParsing -ErrorAction Stop
+            Expand-Archive -Path $TuiZip -DestinationPath $TuiDir -Force
+            Remove-Item -Path $TuiZip -Force
+        }
+        catch {
+            Write-Warning "Could not download TUI"
+            Write-Info "Clone the repository: git clone https://github.com/iris-network/client"
+            return
+        }
+    }
+
+    # Install npm dependencies
+    Write-Info "Installing Node.js dependencies..."
+    Push-Location $TuiDir
+
+    try {
+        & npm install --quiet 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Error installing npm dependencies"
+            Pop-Location
+            return
+        }
+        Write-Success "TUI dependencies installed"
+    }
+    catch {
+        Write-Warning "Error running npm install: $($_.Exception.Message)"
+        Pop-Location
+        return
+    }
+
+    Pop-Location
+
+    # Create iris.bat wrapper script
+    $IrisBatContent = @"
+@echo off
+setlocal
+
+set IRIS_DIR=%LOCALAPPDATA%\Iris
+set TUI_DIR=%IRIS_DIR%\tui
+
+rem Check for TUI mode (no args or 'tui' arg)
+if "%~1"=="" goto :tui
+if /i "%~1"=="tui" goto :tui
+goto :cli
+
+:tui
+rem Launch Node.js TUI
+if exist "%TUI_DIR%\src\index.js" (
+    where node >nul 2>nul
+    if %ERRORLEVEL% equ 0 (
+        node "%TUI_DIR%\src\index.js"
+        exit /b
+    )
+)
+echo Error: TUI not installed or Node.js not available
+echo Run the installer again to set up the TUI
+exit /b 1
+
+:cli
+rem Pass to Python CLI
+where python >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    set PROJECT_ROOT=%USERPROFILE%\Documents\clubai
+    if exist "%PROJECT_ROOT%" (
+        set PYTHONPATH=%PROJECT_ROOT%;%PYTHONPATH%
+    )
+    python -m client.cli %*
+    exit /b
+)
+echo Error: Python not found
+exit /b 1
+"@
+
+    $IrisBatContent | Out-File -FilePath "$InstallDir\bin\iris.bat" -Encoding ASCII
+    Write-Success "iris.bat (TUI/CLI) installed at $InstallDir\bin\iris.bat"
+
+    # Also create a PowerShell wrapper for better terminal support
+    $IrisPs1Content = @"
+# Iris Network - Dashboard & CLI Launcher
+
+`$IrisDir = "`$env:LOCALAPPDATA\Iris"
+`$TuiDir = "`$IrisDir\tui"
+
+# Check for TUI mode (no args or 'tui' arg)
+if (`$args.Count -eq 0 -or `$args[0] -eq "tui") {
+    # Launch Node.js TUI
+    if ((Test-Path "`$TuiDir\src\index.js") -and (Get-Command node -ErrorAction SilentlyContinue)) {
+        & node "`$TuiDir\src\index.js"
+        exit
+    }
+    else {
+        Write-Host "Error: TUI not installed or Node.js not available"
+        Write-Host "Run the installer again to set up the TUI"
+        exit 1
+    }
+}
+else {
+    # Pass to Python CLI
+    `$PythonPath = Get-Command python -ErrorAction SilentlyContinue
+    if (`$PythonPath) {
+        `$ProjectRoot = "`$env:USERPROFILE\Documents\clubai"
+        if (Test-Path `$ProjectRoot) {
+            `$env:PYTHONPATH = "`$ProjectRoot;`$env:PYTHONPATH"
+        }
+        & python -m client.cli `$args
+    }
+    else {
+        Write-Host "Error: Python not found"
+        exit 1
+    }
+}
+"@
+
+    $IrisPs1Content | Out-File -FilePath "$InstallDir\bin\iris.ps1" -Encoding UTF8
+    Write-Success "iris.ps1 (TUI/CLI) installed at $InstallDir\bin\iris.ps1"
+}
+
+# =============================================================================
 # Configuration
 # =============================================================================
 
@@ -473,6 +669,9 @@ function Set-NodeConfiguration {
     # Use detected or provided LM Studio URL
     $script:LMStudioUrlFinal = $script:DetectedLMStudioUrl
 
+    # Format account key with spaces for readability
+    $AccountKeyFormatted = $script:AccountKey -replace '(.{4})(.{4})(.{4})(.{4})', '$1 $2 $3 $4'
+
     # Create config file
     $ConfigContent = @"
 # Iris Network - Node Configuration
@@ -481,7 +680,7 @@ function Set-NodeConfiguration {
 node_id: "$script:NodeId"
 coordinator_url: "$CoordinatorWs"
 lmstudio_url: "$script:LMStudioUrlFinal"
-enrollment_token: "$script:EnrollToken"
+account_key: "$AccountKeyFormatted"
 data_dir: "$InstallDir\data"
 log_dir: "$InstallDir\logs"
 "@
@@ -557,6 +756,8 @@ function Install-WindowsService {
             & nssm set $ServiceName AppStderr "$InstallDir\logs\node.log"
             & nssm set $ServiceName AppRotateFiles 1
             & nssm set $ServiceName AppRotateBytes 10485760
+            # Set environment variables
+            & nssm set $ServiceName AppEnvironmentExtra "IRIS_ACCOUNT_KEY=$($script:AccountKey)" "COORDINATOR_URL=$CoordinatorWs" "LMSTUDIO_URL=$($script:LMStudioUrlFinal)"
             & nssm start $ServiceName
 
             Write-Success "Service installed with NSSM and started"
@@ -568,16 +769,26 @@ function Install-WindowsService {
     else {
         Write-Info "NSSM not found. Creating startup shortcut instead..."
 
-        # Create startup shortcut
+        # Create startup shortcut with environment variables via batch wrapper
+        $WrapperBat = "$InstallDir\bin\start-node.bat"
+        $WrapperContent = @"
+@echo off
+set IRIS_ACCOUNT_KEY=$($script:AccountKey)
+set COORDINATOR_URL=$CoordinatorWs
+set LMSTUDIO_URL=$($script:LMStudioUrlFinal)
+"$BinPath" --config "$ConfigPath"
+"@
+        $WrapperContent | Out-File -FilePath $WrapperBat -Encoding ASCII
+
         $WshShell = New-Object -ComObject WScript.Shell
         $StartupFolder = [Environment]::GetFolderPath("Startup")
         $ShortcutPath = "$StartupFolder\IrisNode.lnk"
 
         $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
-        $Shortcut.TargetPath = $BinPath
-        $Shortcut.Arguments = "--config `"$ConfigPath`""
+        $Shortcut.TargetPath = $WrapperBat
         $Shortcut.WorkingDirectory = $InstallDir
         $Shortcut.Description = "Iris Network Node Agent"
+        $Shortcut.WindowStyle = 7  # Minimized
         $Shortcut.Save()
 
         Write-Success "Startup shortcut created"
@@ -602,19 +813,32 @@ function Show-Completion {
     Write-Host "    Directory:   ${Cyan}$InstallDir${Reset}"
     Write-Host "    Config:      ${Cyan}$InstallDir\config.yaml${Reset}"
     Write-Host ""
-    Write-Host "  ${Bold}Useful commands:${Reset}"
+    Write-Host "  ${Bold}Available commands:${Reset}"
+    Write-Host "    ${Cyan}iris${Reset}           Open interactive dashboard (TUI)"
+    Write-Host "    ${Cyan}iris-node${Reset}      Start the node agent"
+    Write-Host ""
+    Write-Host "  ${Bold}Other CLI commands:${Reset}"
+    Write-Host "    ${Cyan}iris stats${Reset}     View network statistics"
+    Write-Host "    ${Cyan}iris nodes${Reset}     View active nodes"
+    Write-Host "    ${Cyan}iris ask${Reset}       Send inference prompt"
+    Write-Host "    ${Cyan}iris --help${Reset}    Show all commands"
+    Write-Host ""
 
     if ($script:PythonMode) {
+        Write-Host "  ${Bold}Manual node start:${Reset}"
         Write-Host "    ${Cyan}Start:${Reset}      python -m node_agent.standalone_main --config $InstallDir\config.yaml"
     }
     elseif ($script:PathConfigured) {
+        Write-Host "  ${Bold}Manual node start:${Reset}"
         Write-Host "    ${Cyan}Start:${Reset}      iris-node --config $InstallDir\config.yaml"
-        Write-Host "    ${Cyan}Help:${Reset}       iris-node --help"
     }
     else {
+        Write-Host "  ${Bold}Manual node start:${Reset}"
         Write-Host "    ${Cyan}Start:${Reset}      $InstallDir\bin\$BinName --config $InstallDir\config.yaml"
     }
 
+    Write-Host ""
+    Write-Host "  ${Bold}Service management:${Reset}"
     Write-Host "    ${Cyan}View logs:${Reset}  Get-Content -Tail 50 -Wait $InstallDir\logs\node.log"
     Write-Host "    ${Cyan}Status:${Reset}     Get-Service IrisNode -ErrorAction SilentlyContinue"
     Write-Host ""
@@ -643,32 +867,40 @@ function Main {
     # Step 2: Check coordinator
     Test-Coordinator
 
-    # Step 3: Check LM Studio
+    # Step 3: Check Node.js (for TUI)
+    Test-NodeJS
+
+    # Step 4: Check LM Studio
     Test-LMStudio
 
-    # Step 4: Authentication (if no token provided)
-    if ([string]::IsNullOrEmpty($EnrollmentToken)) {
-        Invoke-UserAuthentication
-        New-EnrollmentToken
+    # Step 5: Account Key (if not provided via CLI)
+    if ([string]::IsNullOrEmpty($AccountKey)) {
+        Get-AccountKey
     }
     else {
-        $script:EnrollToken = $EnrollmentToken
-        Write-Step "Using provided token"
-        Write-Success "Token: $($EnrollmentToken.Substring(0, [Math]::Min(20, $EnrollmentToken.Length)))..."
+        # Normalize provided key (remove spaces/dashes)
+        $script:AccountKey = $AccountKey -replace '[\s-]', ''
+        Write-Step "Using provided account key"
+        $KeyPrefix = $script:AccountKey.Substring(0, 4)
+        Write-Success "Account key: ${KeyPrefix} ****"
+        Test-AccountKey
     }
 
-    # Step 5: Download binary
+    # Step 6: Download binary
     Get-Binary
 
-    # Step 6: Setup PATH
+    # Step 7: Setup PATH
     if (-not $script:PythonMode) {
         Set-PathEnvironment
     }
 
-    # Step 7: Configure
+    # Step 8: Install Node.js TUI
+    Install-NodeJSTUI
+
+    # Step 9: Configure
     Set-NodeConfiguration
 
-    # Step 8: Service installation
+    # Step 10: Service installation
     if (-not $NoService) {
         if (Request-Autostart) {
             Install-WindowsService

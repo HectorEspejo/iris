@@ -105,6 +105,226 @@ def logout():
 
 
 # =============================================================================
+# Account Commands (Mullvad-style)
+# =============================================================================
+
+# Create account subcommand group
+account_app = typer.Typer(help="Manage your Iris account (Mullvad-style)")
+app.add_typer(account_app, name="account")
+
+
+@account_app.command("generate")
+def account_generate(
+    url: str = typer.Option(DEFAULT_URL, "--url", "-u", help="Coordinator URL")
+):
+    """
+    Generate a new account key.
+
+    This will create a new account and display your unique 16-digit account key.
+    IMPORTANT: Save this key! It will only be shown once.
+    """
+    import httpx
+
+    async def _generate():
+        async with httpx.AsyncClient(base_url=url, timeout=30.0) as client:
+            try:
+                response = await client.post("/accounts/generate")
+                response.raise_for_status()
+                data = response.json()
+
+                account_key = data["account_key"]
+                account = data["account"]
+
+                # Display the key prominently
+                console.print()
+                console.print(Panel(
+                    f"[bold yellow]{account_key}[/bold yellow]",
+                    title="[green]Your Account Key[/green]",
+                    subtitle="[red]Save this now![/red]",
+                    border_style="green",
+                    padding=(1, 4)
+                ))
+
+                console.print()
+                console.print("[bold red]⚠ IMPORTANT: Save this key in a safe place![/bold red]")
+                console.print("[red]This is the ONLY time it will be shown.[/red]")
+                console.print()
+                console.print("[dim]Account details:[/dim]")
+                console.print(f"  [dim]Account ID:[/dim] {account['id'][:8]}...")
+                console.print(f"  [dim]Status:[/dim] {account['status']}")
+                console.print()
+                console.print("[bold]To start a node, set this environment variable:[/bold]")
+                console.print(f'  [cyan]export IRIS_ACCOUNT_KEY="{account_key}"[/cyan]')
+                console.print()
+
+            except httpx.HTTPStatusError as e:
+                console.print(f"[red]✗ Failed to generate account: {e.response.text}[/red]")
+                raise typer.Exit(1)
+            except Exception as e:
+                console.print(f"[red]✗ Error: {e}[/red]")
+                raise typer.Exit(1)
+
+    run_async(_generate())
+
+
+@account_app.command("info")
+def account_info(
+    account_key: str = typer.Option(..., "--key", "-k", help="Your account key"),
+    url: str = typer.Option(DEFAULT_URL, "--url", "-u", help="Coordinator URL")
+):
+    """Show account information."""
+    import httpx
+
+    async def _info():
+        async with httpx.AsyncClient(base_url=url, timeout=30.0) as client:
+            try:
+                response = await client.get(
+                    "/accounts/me",
+                    params={"account_key": account_key}
+                )
+                response.raise_for_status()
+                info = response.json()
+
+                # Mask the key for display
+                key_display = account_key[:4] + " **** **** ****"
+
+                console.print()
+                console.print(Panel(
+                    f"[bold]Account: {key_display}[/bold]",
+                    border_style="blue"
+                ))
+
+                console.print(f"  Status: [green]{info['status']}[/green]")
+                console.print(f"  Nodes: {info['node_count']}")
+                console.print(f"  Total Earnings: {info['total_earnings']:.2f} credits")
+                console.print(f"  Created: {info['created_at'][:19]}")
+                if info.get('last_activity_at'):
+                    console.print(f"  Last Activity: {info['last_activity_at'][:19]}")
+                console.print()
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    console.print("[red]✗ Invalid or inactive account key[/red]")
+                else:
+                    console.print(f"[red]✗ Error: {e.response.text}[/red]")
+                raise typer.Exit(1)
+            except Exception as e:
+                console.print(f"[red]✗ Error: {e}[/red]")
+                raise typer.Exit(1)
+
+    run_async(_info())
+
+
+@account_app.command("nodes")
+def account_nodes(
+    account_key: str = typer.Option(..., "--key", "-k", help="Your account key"),
+    url: str = typer.Option(DEFAULT_URL, "--url", "-u", help="Coordinator URL")
+):
+    """List all nodes linked to your account."""
+    import httpx
+
+    async def _nodes():
+        async with httpx.AsyncClient(base_url=url, timeout=30.0) as client:
+            try:
+                response = await client.get(
+                    "/accounts/nodes",
+                    params={"account_key": account_key}
+                )
+                response.raise_for_status()
+                nodes_list = response.json()
+
+                if not nodes_list:
+                    console.print("[yellow]No nodes linked to this account yet.[/yellow]")
+                    console.print()
+                    console.print("To link a node, start it with:")
+                    console.print(f'  [cyan]export IRIS_ACCOUNT_KEY="{account_key[:4]} **** **** ****"[/cyan]')
+                    console.print("  [cyan]python -m node_agent.main[/cyan]")
+                    return
+
+                # Mask the key for display
+                key_display = account_key[:4] + " **** **** ****"
+
+                table = Table(title=f"Nodes for Account {key_display}")
+                table.add_column("Node ID", style="cyan")
+                table.add_column("GPU")
+                table.add_column("Model")
+                table.add_column("Tier")
+                table.add_column("Tasks")
+                table.add_column("Reputation", justify="right")
+
+                # Tier colors
+                tier_colors = {
+                    "premium": "gold1",
+                    "standard": "grey70",
+                    "basic": "grey50"
+                }
+
+                for node in nodes_list:
+                    tier = node.get("node_tier", "basic")
+                    tier_color = tier_colors.get(tier, "white")
+
+                    table.add_row(
+                        node["id"][:16] + "...",
+                        node.get("gpu_name", "Unknown")[:15],
+                        node.get("model_name", "?")[:15],
+                        f"[{tier_color}]{tier.capitalize()}[/{tier_color}]",
+                        str(node.get("total_tasks_completed", 0)),
+                        f"{node.get('reputation', 100):.1f}"
+                    )
+
+                console.print(table)
+                console.print(f"\n[dim]Total: {len(nodes_list)} node(s)[/dim]")
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    console.print("[red]✗ Invalid or inactive account key[/red]")
+                else:
+                    console.print(f"[red]✗ Error: {e.response.text}[/red]")
+                raise typer.Exit(1)
+            except Exception as e:
+                console.print(f"[red]✗ Error: {e}[/red]")
+                raise typer.Exit(1)
+
+    run_async(_nodes())
+
+
+@account_app.command("verify")
+def account_verify(
+    account_key: str = typer.Option(..., "--key", "-k", help="Account key to verify"),
+    url: str = typer.Option(DEFAULT_URL, "--url", "-u", help="Coordinator URL")
+):
+    """Verify that an account key is valid."""
+    import httpx
+
+    async def _verify():
+        async with httpx.AsyncClient(base_url=url, timeout=30.0) as client:
+            try:
+                response = await client.post(
+                    "/accounts/verify",
+                    json={"account_key": account_key}
+                )
+                response.raise_for_status()
+                info = response.json()
+
+                key_display = account_key[:4] + " **** **** ****"
+                console.print(f"[green]✓ Account key {key_display} is valid![/green]")
+                console.print(f"  Status: {info['status']}")
+                console.print(f"  Nodes: {info['node_count']}")
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    console.print("[red]✗ Invalid or inactive account key[/red]")
+                else:
+                    console.print(f"[red]✗ Verification failed: {e.response.text}[/red]")
+                raise typer.Exit(1)
+            except Exception as e:
+                console.print(f"[red]✗ Error: {e}[/red]")
+                raise typer.Exit(1)
+
+    run_async(_verify())
+
+
+# =============================================================================
 # Inference Commands
 # =============================================================================
 

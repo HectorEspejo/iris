@@ -37,7 +37,9 @@ class NodeRegisterPayload(BaseModel):
     """Payload for NODE_REGISTER message."""
     node_id: str
     public_key: str
-    # Enrollment token - required for first registration, optional for reconnection
+    # Account key (Mullvad-style) - required for registration
+    account_key: Optional[str] = None
+    # Legacy enrollment token (deprecated, use account_key instead)
     enrollment_token: Optional[str] = None
     lmstudio_port: int = 1234
     model_name: str

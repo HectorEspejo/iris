@@ -59,6 +59,58 @@ class TokenResponse(BaseModel):
 
 
 # =============================================================================
+# Account Models (Mullvad-style)
+# =============================================================================
+
+class AccountStatus(str, Enum):
+    """Account status states."""
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    DELETED = "deleted"
+
+
+class Account(BaseModel):
+    """Account for node operators (Mullvad-style)."""
+    id: str = Field(default_factory=generate_id)
+    account_key_prefix: str  # First 4 digits for partial identification
+    status: AccountStatus = AccountStatus.ACTIVE
+    total_earnings: float = 0.0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_activity_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AccountCreateResponse(BaseModel):
+    """
+    Response when creating a new account.
+
+    IMPORTANT: The account_key is only shown ONCE at creation time.
+    """
+    account_key: str  # Full key, only shown once!
+    account: Account
+
+
+class AccountInfo(BaseModel):
+    """Account information with node count."""
+    id: str
+    account_key_prefix: str
+    status: AccountStatus
+    total_earnings: float
+    node_count: int
+    created_at: datetime
+    last_activity_at: Optional[datetime] = None
+
+
+class AccountWithNodes(BaseModel):
+    """Account with all its linked nodes."""
+    account: Account
+    nodes: list["Node"] = []
+    total_reputation: float = 0.0
+
+
+# =============================================================================
 # Node Models
 # =============================================================================
 
@@ -89,7 +141,8 @@ class NodeCreate(NodeBase):
 
 class Node(NodeBase):
     id: str = Field(default_factory=generate_id)
-    owner_id: str
+    owner_id: Optional[str] = None  # Legacy user reference (admin only)
+    account_id: Optional[str] = None  # Mullvad-style account reference
     reputation: float = 100.0
     total_tasks_completed: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -97,6 +150,10 @@ class Node(NodeBase):
 
     class Config:
         from_attributes = True
+
+
+# Update forward reference for AccountWithNodes
+AccountWithNodes.model_rebuild()
 
 
 class NodeStatus(BaseModel):
