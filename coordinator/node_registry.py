@@ -82,9 +82,9 @@ def calculate_node_tier(
     Calculate node tier based on capabilities.
 
     Scoring:
-    - VRAM (30%): 24+ GB = 30pts, 12+ GB = 20pts, 8+ GB = 10pts
-    - Model params (40%): 30B+ = 40pts, 13B+ = 25pts, 7B+ = 15pts
-    - Speed (30%): 50+ tps = 30pts, 20+ tps = 20pts, 10+ tps = 10pts
+    - VRAM (25%): 24+ GB = 25pts, 16+ GB = 20pts, 12+ GB = 15pts, 8+ GB = 10pts
+    - Model params (50%): 70B+ = 50pts, 30B+ = 40pts, 13B+ = 25pts, 7B+ = 15pts
+    - Speed (25%): 50+ tps = 25pts, 20+ tps = 15pts, 10+ tps = 10pts
 
     Thresholds:
     - Premium: 61+ points
@@ -93,16 +93,20 @@ def calculate_node_tier(
     """
     score = 0
 
-    # VRAM score (0-30)
+    # VRAM score (0-25)
     if vram_gb >= 24:
-        score += 30
-    elif vram_gb >= 12:
+        score += 25
+    elif vram_gb >= 16:
         score += 20
+    elif vram_gb >= 12:
+        score += 15
     elif vram_gb >= 8:
         score += 10
 
-    # Model params score (0-40)
-    if model_params >= 30:
+    # Model params score (0-50) - higher weight for larger models
+    if model_params >= 70:
+        score += 50
+    elif model_params >= 30:
         score += 40
     elif model_params >= 13:
         score += 25
@@ -111,11 +115,11 @@ def calculate_node_tier(
     elif model_params >= 3:
         score += 5
 
-    # Speed score (0-30)
+    # Speed score (0-25)
     if tokens_per_second >= 50:
-        score += 30
+        score += 25
     elif tokens_per_second >= 20:
-        score += 20
+        score += 15
     elif tokens_per_second >= 10:
         score += 10
 
