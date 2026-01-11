@@ -116,10 +116,17 @@ class OpenRouterClassifier:
         Returns:
             TaskDifficulty if successful, None if failed
         """
+        # Check if API key is configured
+        if not OPENROUTER_API_KEY:
+            logger.warning("openrouter_api_key_not_set")
+            return None
+
         # Build classification prompt (limit user prompt to first 1000 chars)
         classification_prompt = CLASSIFICATION_PROMPT_TEMPLATE.format(
             prompt=prompt[:1000]
         )
+
+        logger.info("openrouter_sending_request", model=OPENROUTER_MODEL, prompt_length=len(prompt))
 
         client = await self._get_client()
 
