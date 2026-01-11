@@ -51,22 +51,6 @@ class OpenRouterClassifier:
 
     def __init__(self):
         self._local_classifier = LocalDifficultyClassifier()
-        self._client: Optional[httpx.AsyncClient] = None
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create the HTTP client."""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=OPENROUTER_BASE_URL,
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://iris.network",
-                    "X-Title": "Iris Inference Network"
-                },
-                timeout=CLASSIFICATION_TIMEOUT
-            )
-        return self._client
 
     async def classify(
         self,
@@ -128,68 +112,76 @@ class OpenRouterClassifier:
 
         logger.info("openrouter_sending_request", model=OPENROUTER_MODEL, prompt_length=len(prompt))
 
-        client = await self._get_client()
+        url = f"{OPENROUTER_BASE_URL}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": OPENROUTER_MODEL,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": classification_prompt
+                }
+            ],
+            "max_tokens": 10,
+            "temperature": 0.1
+        }
 
         try:
-            response = await client.post(
-                "/chat/completions",
-                json={
-                    "model": OPENROUTER_MODEL,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": classification_prompt
-                        }
-                    ],
-                    "max_tokens": 10,
-                    "temperature": 0.1
-                }
-            )
+            async with httpx.AsyncClient(timeout=CLASSIFICATION_TIMEOUT) as client:
+                response = await client.post(url, headers=headers, json=payload)
 
-            if response.status_code != 200:
-                logger.warning(
-                    "openrouter_api_error",
-                    status_code=response.status_code,
-                    response=response.text[:200]
+                logger.info(
+                    "openrouter_response_status",
+                    status_code=response.status_code
                 )
-                return None
 
-            data = response.json()
-
-            # Log full response structure for debugging
-            logger.info(
-                "openrouter_raw_response",
-                data=str(data)[:500]
-            )
-
-            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-
-            # If content is empty, check for error in response
-            if not content:
-                error = data.get("error", {})
-                if error:
+                if response.status_code != 200:
                     logger.warning(
-                        "openrouter_response_error",
-                        error=str(error)[:200]
+                        "openrouter_api_error",
+                        status_code=response.status_code,
+                        response=response.text[:500]
                     )
                     return None
 
-            difficulty = self._parse_classification_response(content)
+                data = response.json()
 
-            if difficulty:
+                # Log full response structure for debugging
                 logger.info(
-                    "openrouter_classification_success",
-                    difficulty=difficulty.value,
-                    model=OPENROUTER_MODEL,
-                    raw_response=content[:50]
+                    "openrouter_raw_response",
+                    data=str(data)[:500]
                 )
-                return difficulty
-            else:
-                logger.warning(
-                    "classification_parse_failed",
-                    response=content[:100] if content else "(empty response)"
-                )
-                return None
+
+                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+                # If content is empty, check for error in response
+                if not content:
+                    error = data.get("error", {})
+                    if error:
+                        logger.warning(
+                            "openrouter_response_error",
+                            error=str(error)[:200]
+                        )
+                    return None
+
+                difficulty = self._parse_classification_response(content)
+
+                if difficulty:
+                    logger.info(
+                        "openrouter_classification_success",
+                        difficulty=difficulty.value,
+                        model=OPENROUTER_MODEL,
+                        raw_response=content[:50]
+                    )
+                    return difficulty
+                else:
+                    logger.warning(
+                        "classification_parse_failed",
+                        response=content[:100] if content else "(empty response)"
+                    )
+                    return None
 
         except httpx.TimeoutException:
             logger.warning("openrouter_timeout", timeout=CLASSIFICATION_TIMEOUT)
@@ -233,12 +225,6 @@ class OpenRouterClassifier:
 
         # Failed to parse
         return None
-
-    async def close(self):
-        """Close the HTTP client."""
-        if self._client and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
 
 
 class LocalDifficultyClassifier:
