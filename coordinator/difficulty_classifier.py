@@ -2,33 +2,31 @@
 Iris Task Difficulty Classifier
 
 Classifies tasks using:
-1. LLM-based classification via BASIC tier nodes (primary)
+1. OpenRouter API with fast LLM (primary)
 2. Local keyword-based classification (fallback)
 """
 
 import asyncio
 import re
+import httpx
 from typing import Optional, TYPE_CHECKING
 import structlog
 
-from shared.models import TaskDifficulty, generate_id
-from shared.protocol import (
-    MessageType,
-    ProtocolMessage,
-    ClassifyAssignPayload,
-    ClassifyResultPayload,
-    ClassifyErrorPayload,
-    parse_payload,
-)
+from shared.models import TaskDifficulty
 
 if TYPE_CHECKING:
-    from .node_registry import NodeRegistry, ConnectedNode
+    from .node_registry import NodeRegistry
     from .crypto import CoordinatorCrypto
 
 logger = structlog.get_logger()
 
+# OpenRouter configuration
+OPENROUTER_API_KEY = "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"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = "openai/gpt-oss-120b"
+
 # Classification constants
-CLASSIFICATION_TIMEOUT = 15  # seconds
+CLASSIFICATION_TIMEOUT = 10  # seconds
 CLASSIFICATION_PROMPT_TEMPLATE = """Classify the following user request into exactly one difficulty level.
 
 Rules:
@@ -44,32 +42,46 @@ User request:
 Respond with ONLY one word: SIMPLE, COMPLEX, or ADVANCED"""
 
 
-class LLMDifficultyClassifier:
+class OpenRouterClassifier:
     """
-    Classifies task difficulty using LLM inference on BASIC tier nodes.
-    Falls back to local keyword-based classification if LLM fails.
+    Classifies task difficulty using OpenRouter API.
+    Falls back to local keyword-based classification if API fails.
     """
 
     def __init__(self):
-        self._pending_classifications: dict[str, asyncio.Event] = {}
-        self._classification_results: dict[str, str] = {}
         self._local_classifier = LocalDifficultyClassifier()
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get or create the HTTP client."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                base_url=OPENROUTER_BASE_URL,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://iris.network",
+                    "X-Title": "Iris Inference Network"
+                },
+                timeout=CLASSIFICATION_TIMEOUT
+            )
+        return self._client
 
     async def classify(
         self,
         prompt: str,
-        node_registry: "NodeRegistry",
-        coordinator_crypto: "CoordinatorCrypto",
+        node_registry: Optional["NodeRegistry"] = None,
+        coordinator_crypto: Optional["CoordinatorCrypto"] = None,
         subtask_count: int = 1,
         explicit_difficulty: Optional[TaskDifficulty] = None
     ) -> TaskDifficulty:
         """
-        Classify task difficulty using LLM-based classification.
+        Classify task difficulty using OpenRouter API.
 
         Args:
             prompt: The user prompt to classify
-            node_registry: NodeRegistry instance for node selection
-            coordinator_crypto: CoordinatorCrypto for encryption
+            node_registry: Unused (kept for backwards compatibility)
+            coordinator_crypto: Unused (kept for backwards compatibility)
             subtask_count: Number of subtasks (for local fallback)
             explicit_difficulty: User-specified difficulty (overrides all)
 
@@ -81,133 +93,85 @@ class LLMDifficultyClassifier:
             logger.debug("difficulty_explicit", difficulty=explicit_difficulty.value)
             return explicit_difficulty
 
-        # Try LLM-based classification
+        # Try OpenRouter API classification
         try:
-            difficulty = await self._classify_via_llm(
-                prompt, node_registry, coordinator_crypto
-            )
+            difficulty = await self._classify_via_openrouter(prompt)
             if difficulty:
                 return difficulty
         except Exception as e:
-            logger.warning("llm_classification_failed", error=str(e))
+            logger.warning("openrouter_classification_failed", error=str(e))
 
         # Fallback to local classifier
         logger.info("using_local_classifier_fallback")
         return self._local_classifier.classify(prompt, subtask_count)
 
-    async def _classify_via_llm(
+    async def _classify_via_openrouter(
         self,
-        prompt: str,
-        node_registry: "NodeRegistry",
-        coordinator_crypto: "CoordinatorCrypto"
+        prompt: str
     ) -> Optional[TaskDifficulty]:
         """
-        Send classification request to a BASIC tier node.
+        Send classification request to OpenRouter API.
 
         Returns:
             TaskDifficulty if successful, None if failed
         """
-        # Select fastest BASIC node
-        node = await node_registry.select_fastest_basic_node()
-        if not node:
-            logger.info("no_basic_nodes_for_classification")
-            return None
-
-        classify_id = generate_id()
-
         # Build classification prompt (limit user prompt to first 1000 chars)
         classification_prompt = CLASSIFICATION_PROMPT_TEMPLATE.format(
             prompt=prompt[:1000]
         )
 
-        # Encrypt prompt for node
-        encrypted_prompt = coordinator_crypto.encrypt_for_node(
-            node.public_key,
-            classification_prompt
-        )
-
-        # Create event for waiting
-        self._pending_classifications[classify_id] = asyncio.Event()
+        client = await self._get_client()
 
         try:
-            # Send classification request
-            message = ProtocolMessage.create(
-                MessageType.CLASSIFY_ASSIGN,
-                ClassifyAssignPayload(
-                    classify_id=classify_id,
-                    encrypted_prompt=encrypted_prompt,
-                    timeout_seconds=CLASSIFICATION_TIMEOUT
-                )
+            response = await client.post(
+                "/chat/completions",
+                json={
+                    "model": OPENROUTER_MODEL,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": classification_prompt
+                        }
+                    ],
+                    "max_tokens": 10,
+                    "temperature": 0.1
+                }
             )
 
-            success = await node_registry.send_to_node(node.node_id, message)
-            if not success:
+            if response.status_code != 200:
                 logger.warning(
-                    "classification_send_failed",
-                    node_id=node.node_id
+                    "openrouter_api_error",
+                    status_code=response.status_code,
+                    response=response.text[:200]
                 )
                 return None
 
-            node_registry.increment_load(node.node_id)
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-            logger.info(
-                "classification_sent",
-                classify_id=classify_id,
-                node_id=node.node_id
-            )
+            difficulty = self._parse_classification_response(content)
 
-            # Wait for result with timeout
-            try:
-                await asyncio.wait_for(
-                    self._pending_classifications[classify_id].wait(),
-                    timeout=CLASSIFICATION_TIMEOUT + 2  # Extra buffer
+            if difficulty:
+                logger.info(
+                    "openrouter_classification_success",
+                    difficulty=difficulty.value,
+                    model=OPENROUTER_MODEL,
+                    raw_response=content[:50]
                 )
-            except asyncio.TimeoutError:
+                return difficulty
+            else:
                 logger.warning(
-                    "classification_timeout",
-                    classify_id=classify_id,
-                    node_id=node.node_id
+                    "classification_parse_failed",
+                    response=content[:100]
                 )
-                # Update reputation for timeout
-                from .reputation import reputation_system
-                asyncio.create_task(
-                    reputation_system.record_task_timeout(node.node_id)
-                )
-                node_registry.decrement_load(node.node_id)
                 return None
 
-            # Get and parse result
-            result = self._classification_results.pop(classify_id, None)
-            if result:
-                difficulty = self._parse_classification_response(result)
-                if difficulty:
-                    logger.info(
-                        "llm_classification_success",
-                        classify_id=classify_id,
-                        difficulty=difficulty.value,
-                        node_id=node.node_id
-                    )
-                    return difficulty
-                else:
-                    logger.warning(
-                        "classification_parse_failed",
-                        classify_id=classify_id,
-                        response=result[:100]
-                    )
-                    # Record as invalid response
-                    from .reputation import reputation_system
-                    asyncio.create_task(
-                        reputation_system.record_task_failed(
-                            node.node_id, "INVALID_RESPONSE"
-                        )
-                    )
-
+        except httpx.TimeoutException:
+            logger.warning("openrouter_timeout", timeout=CLASSIFICATION_TIMEOUT)
             return None
-
-        finally:
-            # Cleanup
-            self._pending_classifications.pop(classify_id, None)
-            self._classification_results.pop(classify_id, None)
+        except Exception as e:
+            logger.error("openrouter_request_failed", error=str(e))
+            return None
 
     def _parse_classification_response(
         self,
@@ -245,102 +209,16 @@ class LLMDifficultyClassifier:
         # Failed to parse
         return None
 
-    async def handle_classify_result(
-        self,
-        node_id: str,
-        message: ProtocolMessage,
-        node_registry: "NodeRegistry",
-        coordinator_crypto: "CoordinatorCrypto"
-    ) -> None:
-        """
-        Handle a classification result from a node.
-
-        Args:
-            node_id: Node that sent the result
-            message: The result message
-            node_registry: NodeRegistry for node info
-            coordinator_crypto: For decryption
-        """
-        payload = parse_payload(message, ClassifyResultPayload)
-
-        try:
-            node = node_registry.get_node(node_id)
-            if not node:
-                logger.error("classify_result_unknown_node", node_id=node_id)
-                return
-
-            # Decrypt response
-            response = coordinator_crypto.decrypt_from_node(
-                node.public_key,
-                payload.encrypted_response
-            )
-
-            # Store result
-            self._classification_results[payload.classify_id] = response
-
-            # Signal completion
-            if payload.classify_id in self._pending_classifications:
-                self._pending_classifications[payload.classify_id].set()
-
-            # Update reputation (successful task completion)
-            from .reputation import reputation_system
-            asyncio.create_task(
-                reputation_system.record_task_completed(
-                    node_id,
-                    payload.execution_time_ms
-                )
-            )
-
-            node_registry.decrement_load(node_id)
-
-            logger.info(
-                "classify_result_received",
-                classify_id=payload.classify_id,
-                node_id=node_id,
-                execution_time_ms=payload.execution_time_ms
-            )
-
-        except Exception as e:
-            logger.error(
-                "classify_result_processing_failed",
-                classify_id=payload.classify_id,
-                error=str(e)
-            )
-
-    async def handle_classify_error(
-        self,
-        node_id: str,
-        message: ProtocolMessage,
-        node_registry: "NodeRegistry"
-    ) -> None:
-        """
-        Handle a classification error from a node.
-        """
-        payload = parse_payload(message, ClassifyErrorPayload)
-
-        # Signal completion (as failed)
-        if payload.classify_id in self._pending_classifications:
-            self._pending_classifications[payload.classify_id].set()
-
-        node_registry.decrement_load(node_id)
-
-        # Update reputation
-        from .reputation import reputation_system
-        asyncio.create_task(
-            reputation_system.record_task_failed(node_id, payload.error_code)
-        )
-
-        logger.error(
-            "classify_error_received",
-            classify_id=payload.classify_id,
-            node_id=node_id,
-            error_code=payload.error_code
-        )
+    async def close(self):
+        """Close the HTTP client."""
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
 
 class LocalDifficultyClassifier:
     """
-    Local keyword-based classifier (fallback when LLM not available).
+    Local keyword-based classifier (fallback when API not available).
 
     Classification criteria:
     - SIMPLE: Short questions, simple translations, direct answers
@@ -559,20 +437,23 @@ class LocalDifficultyClassifier:
 
 
 # Global instances
-llm_difficulty_classifier = LLMDifficultyClassifier()
+openrouter_classifier = OpenRouterClassifier()
 local_difficulty_classifier = LocalDifficultyClassifier()
+
+# Backwards compatibility alias
+llm_difficulty_classifier = openrouter_classifier
 
 
 # Convenience functions
 async def classify_task_difficulty_async(
     prompt: str,
-    node_registry: "NodeRegistry",
-    coordinator_crypto: "CoordinatorCrypto",
+    node_registry: Optional["NodeRegistry"] = None,
+    coordinator_crypto: Optional["CoordinatorCrypto"] = None,
     subtask_count: int = 1,
     explicit_difficulty: Optional[TaskDifficulty] = None
 ) -> TaskDifficulty:
-    """Async convenience function for LLM-based task difficulty classification."""
-    return await llm_difficulty_classifier.classify(
+    """Async convenience function for OpenRouter-based task difficulty classification."""
+    return await openrouter_classifier.classify(
         prompt, node_registry, coordinator_crypto, subtask_count, explicit_difficulty
     )
 
