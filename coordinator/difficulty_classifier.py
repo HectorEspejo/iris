@@ -24,16 +24,36 @@ logger = structlog.get_logger()
 # OpenRouter configuration
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MODEL = "openai/gpt-oss-120b"
+OPENROUTER_MODEL = "openai/gpt-5-nano"
 
 # Classification constants
 CLASSIFICATION_TIMEOUT = 10  # seconds
 CLASSIFICATION_PROMPT_TEMPLATE = """Classify the following user request into exactly one difficulty level.
 
-Rules:
-- SIMPLE: Short questions, translations, definitions, yes/no questions, simple lookups
-- COMPLEX: Analysis, summaries, comparisons, explanations, lists, planning tasks
-- ADVANCED: Code generation/debugging, mathematical proofs, complex reasoning, multi-step problems, architecture design
+SIMPLE (basic questions, quick answers):
+- Definitions: "What is X?"
+- Translations: "Translate X to Y"
+- Yes/no questions, factual lookups
+- Simple greetings or short conversations
+
+COMPLEX (requires analysis or structured output):
+- Summaries, comparisons, pros/cons lists
+- Explanations of concepts
+- Planning, recommendations, advice
+- Essay writing, creative short stories
+
+ADVANCED (requires technical expertise or multi-step reasoning):
+- ANY code/script/program creation or modification
+- ANY algorithm implementation (Markov chains, sorting, ML, etc.)
+- Mathematical proofs, equations, calculations
+- System design, architecture planning
+- Image/audio/video processing tasks
+- API integrations, database queries
+- Debugging, refactoring existing code
+- Multi-step technical problems
+- Scientific or research analysis
+
+IMPORTANT: If the request mentions creating a script, program, code, algorithm, or any technical implementation, it is ALWAYS ADVANCED.
 
 User request:
 \"\"\"
@@ -244,10 +264,22 @@ class LocalDifficultyClassifier:
         "algorithm", "algoritmo", "implement", "implementa", "debug",
         "refactor", "class", "clase", "api", "endpoint", "database",
         "sql", "query", "script", "bug", "error", "exception",
+        "crea un script", "create a script", "write a script", "escribe un script",
+        "genera un programa", "generate a program", "desarrolla", "develop",
+        # Algorithms and ML
+        "markov", "neural", "machine learning", "deep learning",
+        "clustering", "classification", "regression", "modelo", "model",
+        "training", "entrenamiento", "dataset", "tensorflow", "pytorch",
+        "sorting", "search algorithm", "recursion", "recursivo",
+        # Image/Audio/Video processing
+        "imagen", "image", "audio", "video", "processing", "procesamiento",
+        "generar imagen", "generate image", "crear imagen", "create image",
+        "ffmpeg", "opencv", "pillow", "pil", "matplotlib",
         # Math-related
         "matemáticas", "math", "calcul", "equation", "ecuación",
         "formula", "fórmula", "integral", "derivada", "derivative",
         "probabilidad", "probability", "estadística", "statistics",
+        "cadenas de markov", "markov chain", "monte carlo",
         # Reasoning-related
         "razon", "reason", "logic", "lógica", "proof", "prueba",
         "demostración", "theorem", "teorema", "hypothesis", "hipótesis",
@@ -257,6 +289,9 @@ class LocalDifficultyClassifier:
         "system design", "diseño de sistema", "microservice",
         # Complex tasks
         "optimiza", "optimize", "benchmark", "performance", "rendimiento",
+        "automatiza", "automate", "pipeline", "workflow",
+        # File operations
+        "parsear", "parse", "serializar", "serialize", "json", "xml", "csv",
     ]
 
     # Keywords that indicate complex difficulty
