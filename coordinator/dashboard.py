@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from .database import db
 from .node_registry import node_registry
 from .account_service import account_service
+from shared.models import TaskMode
 
 # Router for dashboard routes
 router = APIRouter(tags=["dashboard"])
@@ -228,7 +229,7 @@ async def api_chat(request: Request, chat_request: ChatRequest):
         task = await task_orchestrator.create_task(
             user_id="public_chat",
             prompt=chat_request.prompt,
-            mode="subtasks"
+            mode=TaskMode.SUBTASKS
         )
 
         # Wait for task completion (with timeout)
