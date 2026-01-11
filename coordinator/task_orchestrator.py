@@ -25,12 +25,14 @@ from shared.protocol import (
     TaskAssignPayload,
     TaskResultPayload,
     TaskErrorPayload,
+    TaskStreamPayload,
     parse_payload,
 )
 from .database import db
 from .crypto import coordinator_crypto
 from .node_registry import node_registry
 from .difficulty_classifier import classify_task_difficulty, classify_task_difficulty_async
+from .streaming import streaming_manager
 
 logger = structlog.get_logger()
 
@@ -38,10 +40,12 @@ logger = structlog.get_logger()
 MAX_RETRIES = 3
 
 # Timeout por dificultad de tarea (en segundos)
+# Para tareas complejas y avanzadas, usamos timeouts mucho más largos
+# ya que el streaming mantiene la conexión activa
 DIFFICULTY_TIMEOUTS = {
-    TaskDifficulty.SIMPLE: 60,    # Tareas simples: 1 minuto
-    TaskDifficulty.COMPLEX: 120,  # Tareas complejas: 2 minutos
-    TaskDifficulty.ADVANCED: 180, # Tareas avanzadas: 3 minutos
+    TaskDifficulty.SIMPLE: 60,     # Tareas simples: 1 minuto
+    TaskDifficulty.COMPLEX: 300,   # Tareas complejas: 5 minutos
+    TaskDifficulty.ADVANCED: 600,  # Tareas avanzadas: 10 minutos (prácticamente sin límite)
 }
 DEFAULT_TIMEOUT = 60  # Fallback
 
@@ -70,7 +74,8 @@ class TaskOrchestrator:
         user_id: str,
         prompt: str,
         mode: TaskMode = TaskMode.SUBTASKS,
-        difficulty: Optional[TaskDifficulty] = None
+        difficulty: Optional[TaskDifficulty] = None,
+        enable_streaming: bool = False
     ) -> dict:
         """
         Create and begin processing a new task.
@@ -80,6 +85,7 @@ class TaskOrchestrator:
             prompt: The inference prompt
             mode: Task division mode
             difficulty: Optional explicit difficulty (auto-detected if None)
+            enable_streaming: If True, enable real-time streaming of response chunks
 
         Returns:
             Created task record
@@ -104,16 +110,21 @@ class TaskOrchestrator:
             difficulty=difficulty.value
         )
 
+        # Create streaming queue if streaming is enabled
+        if enable_streaming:
+            streaming_manager.create_stream(task_id)
+
         logger.info(
             "task_created",
             task_id=task_id,
             user_id=user_id,
             mode=mode.value,
-            difficulty=difficulty.value
+            difficulty=difficulty.value,
+            streaming=enable_streaming
         )
 
         # Start processing in background
-        asyncio.create_task(self._process_task(task_id, prompt, mode, difficulty))
+        asyncio.create_task(self._process_task(task_id, prompt, mode, difficulty, enable_streaming))
 
         return task
 
@@ -122,7 +133,8 @@ class TaskOrchestrator:
         task_id: str,
         prompt: str,
         mode: TaskMode,
-        difficulty: TaskDifficulty
+        difficulty: TaskDifficulty,
+        enable_streaming: bool = False
     ) -> None:
         """Process a task based on its mode."""
         try:
@@ -159,11 +171,12 @@ class TaskOrchestrator:
                 "subtasks_created",
                 task_id=task_id,
                 count=len(subtasks),
-                difficulty=adjusted_difficulty.value
+                difficulty=adjusted_difficulty.value,
+                streaming=enable_streaming
             )
 
             # Assign subtasks to nodes using intelligent matching
-            await self._assign_subtasks(subtasks, adjusted_difficulty)
+            await self._assign_subtasks(subtasks, adjusted_difficulty, enable_streaming)
 
             # Wait for all subtasks to complete with difficulty-based timeout
             # Add extra buffer time for coordination overhead
@@ -337,12 +350,18 @@ class TaskOrchestrator:
     async def _assign_subtasks(
         self,
         subtasks: list[dict],
-        difficulty: TaskDifficulty
+        difficulty: TaskDifficulty,
+        enable_streaming: bool = False
     ) -> None:
         """
         Assign subtasks to available nodes using intelligent matching.
 
         Uses select_nodes_v2 to match task difficulty with node capabilities.
+
+        Args:
+            subtasks: List of subtask records
+            difficulty: Task difficulty level
+            enable_streaming: If True, nodes will stream chunks back
         """
         for subtask in subtasks:
             # Select a node using intelligent tier-based matching
@@ -385,7 +404,8 @@ class TaskOrchestrator:
                     subtask_id=subtask["id"],
                     task_id=subtask["task_id"],
                     encrypted_prompt=encrypted_prompt,
-                    timeout_seconds=timeout_seconds
+                    timeout_seconds=timeout_seconds,
+                    enable_streaming=enable_streaming
                 )
             )
 
@@ -399,7 +419,8 @@ class TaskOrchestrator:
                     node_id=node.node_id,
                     node_tier=node.node_tier.value,
                     difficulty=difficulty.value,
-                    timeout_seconds=timeout_seconds
+                    timeout_seconds=timeout_seconds,
+                    streaming=enable_streaming
                 )
             else:
                 await db.fail_subtask(subtask["id"], SubtaskStatus.FAILED.value)
@@ -485,6 +506,12 @@ class TaskOrchestrator:
                 )
             )
 
+            # Complete the stream with final response
+            await streaming_manager.complete_stream(
+                payload.task_id,
+                final_response=response
+            )
+
             logger.info(
                 "task_result_received",
                 subtask_id=payload.subtask_id,
@@ -517,6 +544,12 @@ class TaskOrchestrator:
         # Update node load
         node_registry.decrement_load(node_id)
 
+        # Notify streaming manager of error
+        await streaming_manager.complete_stream(
+            payload.task_id,
+            error=f"{payload.error_code}: {payload.error_message}"
+        )
+
         # Update reputation
         from .reputation import reputation_system
         asyncio.create_task(
@@ -530,6 +563,45 @@ class TaskOrchestrator:
             error_code=payload.error_code,
             error_message=payload.error_message
         )
+
+    async def handle_task_stream(
+        self,
+        node_id: str,
+        message: ProtocolMessage
+    ) -> None:
+        """Handle a streaming chunk from a node."""
+        payload = parse_payload(message, TaskStreamPayload)
+
+        try:
+            # Get the node's public key
+            node = node_registry.get_node(node_id)
+            if not node:
+                logger.error("unknown_node_for_stream", node_id=node_id)
+                return
+
+            # Decrypt the chunk
+            chunk = coordinator_crypto.decrypt_from_node(
+                node.public_key,
+                payload.encrypted_chunk
+            )
+
+            # Push chunk to streaming manager
+            await streaming_manager.push_chunk(payload.task_id, chunk)
+
+            logger.debug(
+                "stream_chunk_received",
+                task_id=payload.task_id,
+                subtask_id=payload.subtask_id,
+                chunk_index=payload.chunk_index,
+                chunk_length=len(chunk)
+            )
+
+        except Exception as e:
+            logger.error(
+                "stream_chunk_processing_failed",
+                subtask_id=payload.subtask_id,
+                error=str(e)
+            )
 
 
 # Global task orchestrator instance

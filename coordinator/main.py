@@ -559,6 +559,11 @@ async def websocket_node(websocket: WebSocket):
                     from .task_orchestrator import task_orchestrator
                     await task_orchestrator.handle_task_error(node_id, message)
 
+            elif message.type == MessageType.TASK_STREAM:
+                if node_id:
+                    from .task_orchestrator import task_orchestrator
+                    await task_orchestrator.handle_task_stream(node_id, message)
+
             elif message.type == MessageType.NODE_DISCONNECT:
                 break
 

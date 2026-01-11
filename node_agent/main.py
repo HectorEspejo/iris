@@ -21,6 +21,7 @@ from shared.protocol import (
     TaskAssignPayload,
     TaskResultPayload,
     TaskErrorPayload,
+    TaskStreamPayload,
     ClassifyAssignPayload,
     ClassifyResultPayload,
     ClassifyErrorPayload,
@@ -411,14 +412,47 @@ class NodeAgent:
             logger.info(
                 "executing_inference_stream",
                 subtask_id=payload.subtask_id,
-                timeout_seconds=payload.timeout_seconds
+                timeout_seconds=payload.timeout_seconds,
+                streaming_enabled=payload.enable_streaming
             )
 
-            # Track token generation for metrics
+            # Track token generation for metrics and streaming
             tokens_generated = 0
+            chunk_index = 0
+            chunk_buffer = []
+            last_stream_time = time.time()
+
+            async def send_stream_chunk(chunk_text: str):
+                """Send a streaming chunk to the coordinator."""
+                nonlocal chunk_index
+                encrypted_chunk = node_crypto.encrypt_for_coordinator(chunk_text)
+                stream_message = ProtocolMessage.create(
+                    MessageType.TASK_STREAM,
+                    TaskStreamPayload(
+                        subtask_id=payload.subtask_id,
+                        task_id=payload.task_id,
+                        encrypted_chunk=encrypted_chunk,
+                        chunk_index=chunk_index
+                    )
+                )
+                await self._send_message(stream_message)
+                chunk_index += 1
+
             def on_token(chunk: str, count: int):
-                nonlocal tokens_generated
+                nonlocal tokens_generated, chunk_buffer, last_stream_time
                 tokens_generated = count
+
+                # If streaming is enabled, buffer chunks and send periodically
+                if payload.enable_streaming:
+                    chunk_buffer.append(chunk)
+                    current_time = time.time()
+                    # Send every 5 tokens or every 150ms, whichever comes first
+                    if len(chunk_buffer) >= 5 or (current_time - last_stream_time) >= 0.15:
+                        chunk_text = "".join(chunk_buffer)
+                        chunk_buffer.clear()
+                        last_stream_time = current_time
+                        # Schedule async send (can't await in sync callback)
+                        asyncio.create_task(send_stream_chunk(chunk_text))
 
             response = await self._lm_client.simple_completion_stream(
                 prompt,
@@ -426,10 +460,15 @@ class NodeAgent:
                 on_token=on_token
             )
 
+            # Send any remaining buffered chunks
+            if payload.enable_streaming and chunk_buffer:
+                await send_stream_chunk("".join(chunk_buffer))
+
             logger.debug(
                 "inference_complete",
                 subtask_id=payload.subtask_id,
-                tokens_generated=tokens_generated
+                tokens_generated=tokens_generated,
+                chunks_sent=chunk_index if payload.enable_streaming else 0
             )
 
             # Calculate execution time
@@ -448,7 +487,7 @@ class NodeAgent:
             # Encrypt response
             encrypted_response = node_crypto.encrypt_for_coordinator(response)
 
-            # Send result
+            # Send final result
             result_message = ProtocolMessage.create(
                 MessageType.TASK_RESULT,
                 TaskResultPayload(

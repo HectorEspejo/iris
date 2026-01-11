@@ -19,6 +19,7 @@ class MessageType(str, Enum):
     NODE_DISCONNECT = "node_disconnect"
     TASK_RESULT = "task_result"
     TASK_ERROR = "task_error"
+    TASK_STREAM = "task_stream"  # Streaming chunks during inference
     CLASSIFY_RESULT = "classify_result"
     CLASSIFY_ERROR = "classify_error"
 
@@ -87,6 +88,7 @@ class TaskAssignPayload(BaseModel):
     task_id: str
     encrypted_prompt: str  # Encrypted with node's public key
     timeout_seconds: int = 60
+    enable_streaming: bool = False  # If True, node sends TASK_STREAM chunks
 
 
 class TaskResultPayload(BaseModel):
@@ -103,6 +105,14 @@ class TaskErrorPayload(BaseModel):
     task_id: str
     error_code: str
     error_message: str
+
+
+class TaskStreamPayload(BaseModel):
+    """Payload for TASK_STREAM message (streaming chunks during inference)."""
+    subtask_id: str
+    task_id: str
+    encrypted_chunk: str  # Encrypted chunk of generated text
+    chunk_index: int = 0  # Sequential index of this chunk
 
 
 class ClassifyAssignPayload(BaseModel):
