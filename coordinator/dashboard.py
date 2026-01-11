@@ -38,13 +38,20 @@ templates = Jinja2Templates(directory=str(templates_dir))
 rate_limit_store: dict[str, dict] = defaultdict(lambda: {
     "messages_sent": 0,
     "first_message_at": None,
-    "account_verified": False
+    "account_verified": False,
+    "unlimited": False
 })
 
 # Constants
 ANONYMOUS_LIMIT = 1
 VERIFIED_LIMIT = 3
+UNLIMITED_LIMIT = 999999
 RATE_LIMIT_WINDOW_HOURS = 24
+
+# Account keys with unlimited messages (normalized without spaces)
+UNLIMITED_ACCOUNT_KEYS = {
+    "4864579347191328",
+}
 
 
 class ChatRequest(BaseModel):
@@ -76,6 +83,10 @@ def check_rate_limit(client_id: str, account_key: Optional[str] = None) -> tuple
     """
     client_data = rate_limit_store[client_id]
 
+    # Unlimited accounts bypass all limits
+    if client_data["unlimited"]:
+        return True, UNLIMITED_LIMIT
+
     # Reset if window has passed
     if client_data["first_message_at"]:
         window_start = datetime.fromisoformat(client_data["first_message_at"])
@@ -105,6 +116,16 @@ def record_message(client_id: str):
 
 async def verify_and_upgrade_limit(client_id: str, account_key: str) -> bool:
     """Verify account key and upgrade rate limit if valid."""
+    # Normalize key (remove spaces)
+    normalized_key = account_key.replace(" ", "").replace("-", "")
+
+    # Check if it's an unlimited key
+    if normalized_key in UNLIMITED_ACCOUNT_KEYS:
+        rate_limit_store[client_id]["account_verified"] = True
+        rate_limit_store[client_id]["unlimited"] = True
+        return True
+
+    # Check against account service
     account_info = await account_service.get_account_by_key(account_key)
     if account_info:
         rate_limit_store[client_id]["account_verified"] = True
