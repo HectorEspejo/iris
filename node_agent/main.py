@@ -30,6 +30,12 @@ from .gpu_info import detect_gpu, GPUDetector
 from .model_info import parse_model_info
 
 # Configure logging
+import logging
+logging.basicConfig(
+    format="%(message)s",
+    level=logging.INFO,
+)
+
 structlog.configure(
     processors=[
         structlog.stdlib.filter_by_level,
@@ -224,6 +230,16 @@ class NodeAgent:
         vram_gb = self._gpu_info.vram_total_gb if self._gpu_info else float(
             os.environ.get("NODE_VRAM_GB", "8")
         )
+
+        # Debug: Log account key status
+        if self.account_key:
+            logger.info(
+                "registering_with_account_key",
+                key_prefix=self.account_key[:4] if len(self.account_key) >= 4 else "???",
+                key_length=len(self.account_key)
+            )
+        else:
+            logger.warning("registering_without_account_key")
 
         message = ProtocolMessage.create(
             MessageType.NODE_REGISTER,

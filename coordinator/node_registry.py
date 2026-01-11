@@ -186,6 +186,15 @@ class NodeRegistry:
             payload = parse_payload(message, NodeRegisterPayload)
             account_id: Optional[str] = None
 
+            # Debug: Log what we received
+            logger.info(
+                "node_registration_received",
+                node_id=payload.node_id,
+                has_account_key=bool(payload.account_key),
+                account_key_prefix=payload.account_key[:4] if payload.account_key and len(payload.account_key) >= 4 else None,
+                has_enrollment_token=bool(payload.enrollment_token)
+            )
+
             # === Account Key Authentication (Primary) ===
             if payload.account_key:
                 # Validate account key format

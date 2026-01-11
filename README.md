@@ -40,17 +40,21 @@ The installer will:
 1. Detect your platform
 2. Check coordinator connectivity
 3. Verify LM Studio is running
-4. Create an account or sign in
-5. Generate an enrollment token automatically
-6. Download the node agent binary
-7. Configure and start your node
+4. Generate an Account Key (or use existing one)
+5. Download the node agent binary
+6. Configure and start your node
 
 ### Manual Installation
 
 If you prefer manual setup:
 
 ```bash
-# 1. Download the binary for your platform
+# 1. Generate an Account Key (Mullvad-style, 16 digits)
+curl -X POST http://168.119.10.189:8000/accounts/generate
+# Response: {"account_key": "1234 5678 9012 3456", "account": {...}}
+# IMPORTANT: Save this key! It will only be shown once.
+
+# 2. Download the binary for your platform
 # Linux AMD64
 curl -fsSL https://github.com/iris-network/iris-node/releases/latest/download/iris-node-linux-amd64 -o iris-node
 # macOS ARM64 (Apple Silicon)
@@ -60,17 +64,34 @@ curl -fsSL https://github.com/iris-network/iris-node/releases/latest/download/ir
 
 chmod +x iris-node
 
-# 2. Create config file
-cat > config.yaml << EOF
-node_id: "my-node-$(hostname)"
-coordinator_url: "ws://168.119.10.189:8000/nodes/connect"
-lmstudio_url: "http://localhost:1234/v1"
-enrollment_token: "YOUR_TOKEN_HERE"
-data_dir: "./data"
-EOF
+# 3. Set your Account Key
+export IRIS_ACCOUNT_KEY="1234 5678 9012 3456"
 
-# 3. Run
-./iris-node --config config.yaml
+# 4. Run
+./iris-node
+```
+
+### Account Key System
+
+Iris uses a **Mullvad-style** anonymous account system:
+
+- **16-digit numeric key** (e.g., `1234 5678 9012 3456`)
+- **No email or password required** - just save your key
+- **One account, multiple nodes** - link all your machines to one account
+- **Shown only once** - save it immediately when generated!
+
+```bash
+# Generate a new account
+iris account generate
+
+# Verify your key is valid
+iris account verify --key "1234 5678 9012 3456"
+
+# See your account info
+iris account info --key "1234 5678 9012 3456"
+
+# List all nodes linked to your account
+iris account nodes --key "1234 5678 9012 3456"
 ```
 
 ### After Installation
@@ -173,12 +194,17 @@ pip install -r requirements.txt
 # Start the coordinator (with hot reload)
 python -m uvicorn coordinator.main:app --host 0.0.0.0 --port 8000 --reload
 
-# In another terminal, start LM Studio and load a model
+# In another terminal, generate an account key
+curl -X POST http://localhost:8000/accounts/generate
+# Save the account_key from the response!
+
+# Start LM Studio and load a model
 
 # Start a node agent
 export NODE_ID="dev-node-1"
 export COORDINATOR_URL="ws://localhost:8000/nodes/connect"
 export LMSTUDIO_URL="http://localhost:1234/v1"
+export IRIS_ACCOUNT_KEY="1234 5678 9012 3456"  # Your key here
 python -m node_agent.main
 ```
 
@@ -259,10 +285,19 @@ pytest tests/ --cov=coordinator --cov=node_agent --cov=shared
 | `/nodes` | GET | Active nodes (auth required) |
 | `/dashboard` | GET | Web dashboard |
 
-### Node Enrollment
+### Accounts (Mullvad-style)
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/nodes/validate-token` | POST | Validate enrollment token |
+| `/accounts/generate` | POST | Generate new account key |
+| `/accounts/verify` | POST | Verify account key is valid |
+| `/accounts/me` | GET | Get account info (pass `account_key` as query param) |
+| `/accounts/nodes` | GET | Get nodes linked to account |
+| `/admin/accounts` | GET | List all accounts (auth required) |
+
+### Node Enrollment (Legacy)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/nodes/validate-token` | POST | Validate enrollment token (deprecated) |
 | `/admin/tokens/generate` | POST | Generate new token (auth required) |
 | `/admin/tokens` | GET | List tokens (auth required) |
 
@@ -283,6 +318,7 @@ pytest tests/ --cov=coordinator --cov=node_agent --cov=shared
 **Node Agent:**
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `IRIS_ACCOUNT_KEY` | (required) | Your 16-digit account key |
 | `NODE_ID` | `node-{hostname}` | Unique node identifier |
 | `COORDINATOR_URL` | `ws://168.119.10.189:8000/nodes/connect` | Coordinator URL |
 | `LMSTUDIO_URL` | `http://localhost:1234/v1` | LM Studio API |
@@ -293,7 +329,7 @@ pytest tests/ --cov=coordinator --cov=node_agent --cov=shared
 node_id: "my-node-name"
 coordinator_url: "ws://168.119.10.189:8000/nodes/connect"
 lmstudio_url: "http://localhost:1234/v1"
-enrollment_token: "iris_v1.eyJ..."
+account_key: "1234 5678 9012 3456"  # Your 16-digit key
 data_dir: "~/.iris/data"
 log_dir: "~/.iris/logs"
 ```
@@ -318,8 +354,9 @@ log_dir: "~/.iris/logs"
 
 ### Security
 - End-to-end encryption (X25519 + AES-256-GCM)
-- JWT authentication
-- Enrollment tokens for node registration
+- JWT authentication (for admin users)
+- Mullvad-style account keys for node registration (anonymous, no email required)
+- Account keys are hashed (SHA256) before storage - never stored in plain text
 
 ---
 
@@ -329,8 +366,10 @@ log_dir: "~/.iris/logs"
 iris-node/
 ├── coordinator/           # Central server
 │   ├── main.py           # FastAPI app
+│   ├── accounts.py       # Account key generator
+│   ├── account_service.py # Account business logic
 │   ├── node_registry.py  # Node management
-│   ├── node_tokens.py    # Enrollment tokens
+│   ├── node_tokens.py    # Enrollment tokens (legacy)
 │   ├── task_orchestrator.py
 │   └── reputation.py
 │
@@ -344,11 +383,11 @@ iris-node/
 │   └── install.ps1       # Windows
 │
 ├── client/               # CLI client
-│   ├── cli.py
+│   ├── cli.py            # Includes account commands
 │   └── sdk.py
 │
 └── shared/               # Shared code
-    ├── models.py
+    ├── models.py         # Includes Account models
     ├── protocol.py
     └── crypto_utils.py
 ```
@@ -360,7 +399,8 @@ iris-node/
 ### Node won't connect
 1. Check LM Studio is running: `curl http://localhost:1234/v1/models`
 2. Check coordinator: `curl http://168.119.10.189:8000/health`
-3. Verify enrollment token is valid
+3. Verify your account key: `iris account verify --key "YOUR_KEY"`
+4. Check environment variable is set: `echo $IRIS_ACCOUNT_KEY`
 
 ### Command not found after installation
 ```bash
@@ -371,8 +411,13 @@ source ~/.zshrc  # or ~/.bashrc
 ~/.iris/bin/iris-node --help
 ```
 
-### Token validation failed
-Tokens are single-use. Generate a new one via the installer or API.
+### Account key not working
+1. Check format: Must be 16 digits (e.g., `1234 5678 9012 3456`)
+2. Verify it's valid: `curl -X POST http://168.119.10.189:8000/accounts/verify -H "Content-Type: application/json" -d '{"account_key": "YOUR_KEY"}'`
+3. Generate a new one if lost: `iris account generate` (but you'll lose access to previous nodes)
+
+### Token validation failed (Legacy)
+If using old enrollment tokens, they are deprecated. Generate an account key instead.
 
 ---
 
