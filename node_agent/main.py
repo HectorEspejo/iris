@@ -21,6 +21,9 @@ from shared.protocol import (
     TaskAssignPayload,
     TaskResultPayload,
     TaskErrorPayload,
+    ClassifyAssignPayload,
+    ClassifyResultPayload,
+    ClassifyErrorPayload,
     parse_payload,
 )
 from .crypto import node_crypto
@@ -307,6 +310,9 @@ class NodeAgent:
         elif message.type == MessageType.TASK_ASSIGN:
             await self._handle_task_assign(message)
 
+        elif message.type == MessageType.CLASSIFY_ASSIGN:
+            await self._handle_classify_assign(message)
+
         elif message.type == MessageType.ERROR:
             logger.error("coordinator_error", payload=message.payload)
 
@@ -445,6 +451,116 @@ class NodeAgent:
             subtask_id=payload.subtask_id,
             error_code=error_code,
             error_message=error_message
+        )
+
+    async def _handle_classify_assign(self, message: ProtocolMessage) -> None:
+        """Handle a classification task from the coordinator."""
+        payload = parse_payload(message, ClassifyAssignPayload)
+
+        logger.info(
+            "classify_task_received",
+            classify_id=payload.classify_id
+        )
+
+        # Execute classification in background
+        task = asyncio.create_task(
+            self._execute_classification(payload)
+        )
+        self._current_tasks[f"classify_{payload.classify_id}"] = task
+
+        task.add_done_callback(
+            lambda t: self._current_tasks.pop(f"classify_{payload.classify_id}", None)
+        )
+
+    async def _execute_classification(
+        self,
+        payload: ClassifyAssignPayload
+    ) -> None:
+        """Execute a classification task."""
+        start_time = time.time()
+
+        try:
+            # Decrypt the prompt
+            prompt = node_crypto.decrypt_from_coordinator(
+                payload.encrypted_prompt
+            )
+
+            logger.debug(
+                "classify_prompt_decrypted",
+                classify_id=payload.classify_id
+            )
+
+            # Execute via LM Studio with tight timeout
+            # Use lower max_tokens for classification (only need one word)
+            logger.info(
+                "executing_classification",
+                classify_id=payload.classify_id,
+                timeout_seconds=payload.timeout_seconds
+            )
+
+            response = await self._lm_client.simple_completion_stream(
+                prompt,
+                timeout=float(payload.timeout_seconds),
+                max_tokens=20  # Only need one word: SIMPLE/COMPLEX/ADVANCED
+            )
+
+            execution_time_ms = int((time.time() - start_time) * 1000)
+
+            # Encrypt response
+            encrypted_response = node_crypto.encrypt_for_coordinator(response)
+
+            # Send result
+            result_message = ProtocolMessage.create(
+                MessageType.CLASSIFY_RESULT,
+                ClassifyResultPayload(
+                    classify_id=payload.classify_id,
+                    encrypted_response=encrypted_response,
+                    execution_time_ms=execution_time_ms
+                )
+            )
+            await self._send_message(result_message)
+
+            logger.info(
+                "classify_completed",
+                classify_id=payload.classify_id,
+                execution_time_ms=execution_time_ms,
+                response=response[:50]  # Log first 50 chars
+            )
+
+        except asyncio.TimeoutError:
+            await self._send_classify_error(
+                payload,
+                "TIMEOUT",
+                f"Classification exceeded timeout of {payload.timeout_seconds}s"
+            )
+
+        except Exception as e:
+            await self._send_classify_error(
+                payload,
+                "EXECUTION_ERROR",
+                str(e)
+            )
+
+    async def _send_classify_error(
+        self,
+        payload: ClassifyAssignPayload,
+        error_code: str,
+        error_message: str
+    ) -> None:
+        """Send a classification error message."""
+        error_msg = ProtocolMessage.create(
+            MessageType.CLASSIFY_ERROR,
+            ClassifyErrorPayload(
+                classify_id=payload.classify_id,
+                error_code=error_code,
+                error_message=error_message
+            )
+        )
+        await self._send_message(error_msg)
+        logger.error(
+            "classify_failed",
+            classify_id=payload.classify_id,
+            error_code=error_code
         )
 
     async def _send_message(self, message: ProtocolMessage) -> None:

@@ -19,11 +19,14 @@ class MessageType(str, Enum):
     NODE_DISCONNECT = "node_disconnect"
     TASK_RESULT = "task_result"
     TASK_ERROR = "task_error"
+    CLASSIFY_RESULT = "classify_result"
+    CLASSIFY_ERROR = "classify_error"
 
     # Coordinator -> Node
     REGISTER_ACK = "register_ack"
     HEARTBEAT_ACK = "heartbeat_ack"
     TASK_ASSIGN = "task_assign"
+    CLASSIFY_ASSIGN = "classify_assign"
 
     # Bidirectional
     ERROR = "error"
@@ -98,6 +101,27 @@ class TaskErrorPayload(BaseModel):
     """Payload for TASK_ERROR message."""
     subtask_id: str
     task_id: str
+    error_code: str
+    error_message: str
+
+
+class ClassifyAssignPayload(BaseModel):
+    """Payload for CLASSIFY_ASSIGN message (Coordinator -> Node)."""
+    classify_id: str
+    encrypted_prompt: str  # Encrypted classification prompt
+    timeout_seconds: int = 15
+
+
+class ClassifyResultPayload(BaseModel):
+    """Payload for CLASSIFY_RESULT message (Node -> Coordinator)."""
+    classify_id: str
+    encrypted_response: str  # Encrypted classification result
+    execution_time_ms: int
+
+
+class ClassifyErrorPayload(BaseModel):
+    """Payload for CLASSIFY_ERROR message (Node -> Coordinator)."""
+    classify_id: str
     error_code: str
     error_message: str
 

@@ -30,7 +30,7 @@ from shared.protocol import (
 from .database import db
 from .crypto import coordinator_crypto
 from .node_registry import node_registry
-from .difficulty_classifier import classify_task_difficulty
+from .difficulty_classifier import classify_task_difficulty, classify_task_difficulty_async
 
 logger = structlog.get_logger()
 
@@ -86,9 +86,14 @@ class TaskOrchestrator:
         """
         task_id = generate_id()
 
-        # Auto-classify difficulty if not provided
+        # Auto-classify difficulty using LLM if not provided
+        # Falls back to local classifier if no BASIC nodes available
         if difficulty is None:
-            difficulty = classify_task_difficulty(prompt)
+            difficulty = await classify_task_difficulty_async(
+                prompt=prompt,
+                node_registry=node_registry,
+                coordinator_crypto=coordinator_crypto
+            )
 
         # Create task in database with difficulty
         task = await db.create_task(

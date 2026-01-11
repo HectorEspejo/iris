@@ -559,6 +559,20 @@ async def websocket_node(websocket: WebSocket):
                     from .task_orchestrator import task_orchestrator
                     await task_orchestrator.handle_task_error(node_id, message)
 
+            elif message.type == MessageType.CLASSIFY_RESULT:
+                if node_id:
+                    from .difficulty_classifier import llm_difficulty_classifier
+                    await llm_difficulty_classifier.handle_classify_result(
+                        node_id, message, node_registry, coordinator_crypto
+                    )
+
+            elif message.type == MessageType.CLASSIFY_ERROR:
+                if node_id:
+                    from .difficulty_classifier import llm_difficulty_classifier
+                    await llm_difficulty_classifier.handle_classify_error(
+                        node_id, message, node_registry
+                    )
+
             elif message.type == MessageType.NODE_DISCONNECT:
                 break
 

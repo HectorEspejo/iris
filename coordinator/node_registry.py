@@ -633,6 +633,44 @@ class NodeRegistry:
 
         return selected
 
+    async def select_fastest_basic_node(self) -> Optional[ConnectedNode]:
+        """
+        Select the BASIC tier node with the highest tokens_per_second.
+
+        Used for classification mini-tasks that need quick responses.
+        Prefers nodes with low current load to ensure fast response.
+
+        Returns:
+            Best BASIC node or None if no BASIC nodes available
+        """
+        basic_nodes = [
+            node for node in self._nodes.values()
+            if node.node_tier == NodeTier.BASIC
+            and self.is_online(node.node_id)
+            and node.current_load < 3  # Avoid overloaded nodes
+        ]
+
+        if not basic_nodes:
+            logger.debug("no_basic_nodes_available_for_classification")
+            return None
+
+        # Sort by tokens_per_second (descending), then by load (ascending)
+        sorted_nodes = sorted(
+            basic_nodes,
+            key=lambda n: (n.tokens_per_second, -n.current_load),
+            reverse=True
+        )
+
+        selected = sorted_nodes[0]
+        logger.debug(
+            "fastest_basic_node_selected",
+            node_id=selected.node_id,
+            tokens_per_second=selected.tokens_per_second,
+            current_load=selected.current_load
+        )
+
+        return selected
+
     async def send_to_node(self, node_id: str, message: ProtocolMessage) -> bool:
         """
         Send a message to a specific node.

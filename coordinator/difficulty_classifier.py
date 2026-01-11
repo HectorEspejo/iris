@@ -1,21 +1,346 @@
 """
 Iris Task Difficulty Classifier
 
-Classifies tasks into difficulty levels based on prompt analysis.
+Classifies tasks using:
+1. LLM-based classification via BASIC tier nodes (primary)
+2. Local keyword-based classification (fallback)
 """
 
+import asyncio
 import re
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 import structlog
 
-from shared.models import TaskDifficulty
+from shared.models import TaskDifficulty, generate_id
+from shared.protocol import (
+    MessageType,
+    ProtocolMessage,
+    ClassifyAssignPayload,
+    ClassifyResultPayload,
+    ClassifyErrorPayload,
+    parse_payload,
+)
+
+if TYPE_CHECKING:
+    from .node_registry import NodeRegistry, ConnectedNode
+    from .crypto import CoordinatorCrypto
 
 logger = structlog.get_logger()
 
+# Classification constants
+CLASSIFICATION_TIMEOUT = 15  # seconds
+CLASSIFICATION_PROMPT_TEMPLATE = """Classify the following user request into exactly one difficulty level.
 
-class DifficultyClassifier:
+Rules:
+- SIMPLE: Short questions, translations, definitions, yes/no questions, simple lookups
+- COMPLEX: Analysis, summaries, comparisons, explanations, lists, planning tasks
+- ADVANCED: Code generation/debugging, mathematical proofs, complex reasoning, multi-step problems, architecture design
+
+User request:
+\"\"\"
+{prompt}
+\"\"\"
+
+Respond with ONLY one word: SIMPLE, COMPLEX, or ADVANCED"""
+
+
+class LLMDifficultyClassifier:
     """
-    Classifies task difficulty based on prompt content and structure.
+    Classifies task difficulty using LLM inference on BASIC tier nodes.
+    Falls back to local keyword-based classification if LLM fails.
+    """
+
+    def __init__(self):
+        self._pending_classifications: dict[str, asyncio.Event] = {}
+        self._classification_results: dict[str, str] = {}
+        self._local_classifier = LocalDifficultyClassifier()
+
+    async def classify(
+        self,
+        prompt: str,
+        node_registry: "NodeRegistry",
+        coordinator_crypto: "CoordinatorCrypto",
+        subtask_count: int = 1,
+        explicit_difficulty: Optional[TaskDifficulty] = None
+    ) -> TaskDifficulty:
+        """
+        Classify task difficulty using LLM-based classification.
+
+        Args:
+            prompt: The user prompt to classify
+            node_registry: NodeRegistry instance for node selection
+            coordinator_crypto: CoordinatorCrypto for encryption
+            subtask_count: Number of subtasks (for local fallback)
+            explicit_difficulty: User-specified difficulty (overrides all)
+
+        Returns:
+            TaskDifficulty enum value
+        """
+        # Honor explicit difficulty if provided
+        if explicit_difficulty:
+            logger.debug("difficulty_explicit", difficulty=explicit_difficulty.value)
+            return explicit_difficulty
+
+        # Try LLM-based classification
+        try:
+            difficulty = await self._classify_via_llm(
+                prompt, node_registry, coordinator_crypto
+            )
+            if difficulty:
+                return difficulty
+        except Exception as e:
+            logger.warning("llm_classification_failed", error=str(e))
+
+        # Fallback to local classifier
+        logger.info("using_local_classifier_fallback")
+        return self._local_classifier.classify(prompt, subtask_count)
+
+    async def _classify_via_llm(
+        self,
+        prompt: str,
+        node_registry: "NodeRegistry",
+        coordinator_crypto: "CoordinatorCrypto"
+    ) -> Optional[TaskDifficulty]:
+        """
+        Send classification request to a BASIC tier node.
+
+        Returns:
+            TaskDifficulty if successful, None if failed
+        """
+        # Select fastest BASIC node
+        node = await node_registry.select_fastest_basic_node()
+        if not node:
+            logger.info("no_basic_nodes_for_classification")
+            return None
+
+        classify_id = generate_id()
+
+        # Build classification prompt (limit user prompt to first 1000 chars)
+        classification_prompt = CLASSIFICATION_PROMPT_TEMPLATE.format(
+            prompt=prompt[:1000]
+        )
+
+        # Encrypt prompt for node
+        encrypted_prompt = coordinator_crypto.encrypt_for_node(
+            node.public_key,
+            classification_prompt
+        )
+
+        # Create event for waiting
+        self._pending_classifications[classify_id] = asyncio.Event()
+
+        try:
+            # Send classification request
+            message = ProtocolMessage.create(
+                MessageType.CLASSIFY_ASSIGN,
+                ClassifyAssignPayload(
+                    classify_id=classify_id,
+                    encrypted_prompt=encrypted_prompt,
+                    timeout_seconds=CLASSIFICATION_TIMEOUT
+                )
+            )
+
+            success = await node_registry.send_to_node(node.node_id, message)
+            if not success:
+                logger.warning(
+                    "classification_send_failed",
+                    node_id=node.node_id
+                )
+                return None
+
+            node_registry.increment_load(node.node_id)
+
+            logger.info(
+                "classification_sent",
+                classify_id=classify_id,
+                node_id=node.node_id
+            )
+
+            # Wait for result with timeout
+            try:
+                await asyncio.wait_for(
+                    self._pending_classifications[classify_id].wait(),
+                    timeout=CLASSIFICATION_TIMEOUT + 2  # Extra buffer
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "classification_timeout",
+                    classify_id=classify_id,
+                    node_id=node.node_id
+                )
+                # Update reputation for timeout
+                from .reputation import reputation_system
+                asyncio.create_task(
+                    reputation_system.record_task_timeout(node.node_id)
+                )
+                node_registry.decrement_load(node.node_id)
+                return None
+
+            # Get and parse result
+            result = self._classification_results.pop(classify_id, None)
+            if result:
+                difficulty = self._parse_classification_response(result)
+                if difficulty:
+                    logger.info(
+                        "llm_classification_success",
+                        classify_id=classify_id,
+                        difficulty=difficulty.value,
+                        node_id=node.node_id
+                    )
+                    return difficulty
+                else:
+                    logger.warning(
+                        "classification_parse_failed",
+                        classify_id=classify_id,
+                        response=result[:100]
+                    )
+                    # Record as invalid response
+                    from .reputation import reputation_system
+                    asyncio.create_task(
+                        reputation_system.record_task_failed(
+                            node.node_id, "INVALID_RESPONSE"
+                        )
+                    )
+
+            return None
+
+        finally:
+            # Cleanup
+            self._pending_classifications.pop(classify_id, None)
+            self._classification_results.pop(classify_id, None)
+
+    def _parse_classification_response(
+        self,
+        response: str
+    ) -> Optional[TaskDifficulty]:
+        """
+        Parse LLM response to extract difficulty level.
+
+        Args:
+            response: Raw LLM response text
+
+        Returns:
+            TaskDifficulty or None if parsing fails
+        """
+        # Normalize response
+        response_upper = response.strip().upper()
+
+        # Direct match (ideal case)
+        if response_upper == "SIMPLE":
+            return TaskDifficulty.SIMPLE
+        elif response_upper == "COMPLEX":
+            return TaskDifficulty.COMPLEX
+        elif response_upper == "ADVANCED":
+            return TaskDifficulty.ADVANCED
+
+        # Search for keywords in response (LLM may add explanation)
+        # Priority: ADVANCED > COMPLEX > SIMPLE (to avoid false SIMPLE)
+        if "ADVANCED" in response_upper:
+            return TaskDifficulty.ADVANCED
+        elif "COMPLEX" in response_upper:
+            return TaskDifficulty.COMPLEX
+        elif "SIMPLE" in response_upper:
+            return TaskDifficulty.SIMPLE
+
+        # Failed to parse
+        return None
+
+    async def handle_classify_result(
+        self,
+        node_id: str,
+        message: ProtocolMessage,
+        node_registry: "NodeRegistry",
+        coordinator_crypto: "CoordinatorCrypto"
+    ) -> None:
+        """
+        Handle a classification result from a node.
+
+        Args:
+            node_id: Node that sent the result
+            message: The result message
+            node_registry: NodeRegistry for node info
+            coordinator_crypto: For decryption
+        """
+        payload = parse_payload(message, ClassifyResultPayload)
+
+        try:
+            node = node_registry.get_node(node_id)
+            if not node:
+                logger.error("classify_result_unknown_node", node_id=node_id)
+                return
+
+            # Decrypt response
+            response = coordinator_crypto.decrypt_from_node(
+                node.public_key,
+                payload.encrypted_response
+            )
+
+            # Store result
+            self._classification_results[payload.classify_id] = response
+
+            # Signal completion
+            if payload.classify_id in self._pending_classifications:
+                self._pending_classifications[payload.classify_id].set()
+
+            # Update reputation (successful task completion)
+            from .reputation import reputation_system
+            asyncio.create_task(
+                reputation_system.record_task_completed(
+                    node_id,
+                    payload.execution_time_ms
+                )
+            )
+
+            node_registry.decrement_load(node_id)
+
+            logger.info(
+                "classify_result_received",
+                classify_id=payload.classify_id,
+                node_id=node_id,
+                execution_time_ms=payload.execution_time_ms
+            )
+
+        except Exception as e:
+            logger.error(
+                "classify_result_processing_failed",
+                classify_id=payload.classify_id,
+                error=str(e)
+            )
+
+    async def handle_classify_error(
+        self,
+        node_id: str,
+        message: ProtocolMessage,
+        node_registry: "NodeRegistry"
+    ) -> None:
+        """
+        Handle a classification error from a node.
+        """
+        payload = parse_payload(message, ClassifyErrorPayload)
+
+        # Signal completion (as failed)
+        if payload.classify_id in self._pending_classifications:
+            self._pending_classifications[payload.classify_id].set()
+
+        node_registry.decrement_load(node_id)
+
+        # Update reputation
+        from .reputation import reputation_system
+        asyncio.create_task(
+            reputation_system.record_task_failed(node_id, payload.error_code)
+        )
+
+        logger.error(
+            "classify_error_received",
+            classify_id=payload.classify_id,
+            node_id=node_id,
+            error_code=payload.error_code
+        )
+
+
+class LocalDifficultyClassifier:
+    """
+    Local keyword-based classifier (fallback when LLM not available).
 
     Classification criteria:
     - SIMPLE: Short questions, simple translations, direct answers
@@ -133,7 +458,7 @@ class DifficultyClassifier:
             difficulty = TaskDifficulty.SIMPLE
 
         logger.debug(
-            "difficulty_classified",
+            "difficulty_classified_local",
             difficulty=difficulty.value,
             score=score,
             token_estimate=token_estimate,
@@ -233,8 +558,23 @@ class DifficultyClassifier:
         return "; ".join(reasons)
 
 
-# Global classifier instance
-difficulty_classifier = DifficultyClassifier()
+# Global instances
+llm_difficulty_classifier = LLMDifficultyClassifier()
+local_difficulty_classifier = LocalDifficultyClassifier()
+
+
+# Convenience functions
+async def classify_task_difficulty_async(
+    prompt: str,
+    node_registry: "NodeRegistry",
+    coordinator_crypto: "CoordinatorCrypto",
+    subtask_count: int = 1,
+    explicit_difficulty: Optional[TaskDifficulty] = None
+) -> TaskDifficulty:
+    """Async convenience function for LLM-based task difficulty classification."""
+    return await llm_difficulty_classifier.classify(
+        prompt, node_registry, coordinator_crypto, subtask_count, explicit_difficulty
+    )
 
 
 def classify_task_difficulty(
@@ -242,5 +582,5 @@ def classify_task_difficulty(
     subtask_count: int = 1,
     explicit_difficulty: Optional[TaskDifficulty] = None
 ) -> TaskDifficulty:
-    """Convenience function for task difficulty classification."""
-    return difficulty_classifier.classify(prompt, subtask_count, explicit_difficulty)
+    """Sync convenience function using local classifier only (for backwards compatibility)."""
+    return local_difficulty_classifier.classify(prompt, subtask_count, explicit_difficulty)
