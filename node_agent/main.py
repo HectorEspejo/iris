@@ -107,6 +107,56 @@ class NodeAgent:
         """Get the number of currently executing tasks."""
         return len(self._current_tasks)
 
+    async def _run_benchmark(self) -> None:
+        """
+        Run a quick benchmark to measure tokens/second.
+
+        Sends a short prompt to the model and measures generation speed.
+        This ensures the node registers with accurate performance metrics.
+        """
+        logger.info("running_benchmark", message="Measuring tokens/second...")
+
+        benchmark_prompt = "Count from 1 to 20, one number per line."
+
+        try:
+            start_time = time.time()
+            tokens_generated = 0
+
+            def on_token(chunk: str, count: int):
+                nonlocal tokens_generated
+                tokens_generated = count
+
+            # Run benchmark with 30 second timeout
+            await self._lm_client.simple_completion_stream(
+                benchmark_prompt,
+                timeout=30.0,
+                max_tokens=100,
+                on_token=on_token
+            )
+
+            elapsed_ms = (time.time() - start_time) * 1000
+
+            # Calculate tokens/second
+            if elapsed_ms > 0 and tokens_generated > 0:
+                self._tokens_per_second = tokens_generated / (elapsed_ms / 1000)
+                self._total_tokens = tokens_generated
+                self._total_time_ms = int(elapsed_ms)
+
+            logger.info(
+                "benchmark_complete",
+                tokens_generated=tokens_generated,
+                elapsed_ms=round(elapsed_ms, 2),
+                tokens_per_second=round(self._tokens_per_second, 2)
+            )
+
+        except asyncio.TimeoutError:
+            logger.warning("benchmark_timeout", message="Benchmark timed out, using default tps=0")
+            self._tokens_per_second = 0.0
+
+        except Exception as e:
+            logger.warning("benchmark_failed", error=str(e), message="Using default tps=0")
+            self._tokens_per_second = 0.0
+
     async def start(self) -> None:
         """Start the node agent."""
         logger.info(
@@ -147,6 +197,9 @@ class NodeAgent:
             params_b=self._model_info.params_billions,
             quantization=self._model_info.quantization
         )
+
+        # Run benchmark to measure tokens/second
+        await self._run_benchmark()
 
         # Initialize heartbeat
         self._heartbeat = HeartbeatManager(self.node_id)
