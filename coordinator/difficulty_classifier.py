@@ -7,6 +7,7 @@ Classifies tasks using:
 """
 
 import asyncio
+import os
 import re
 import httpx
 from typing import Optional, TYPE_CHECKING
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 # OpenRouter configuration
-OPENROUTER_API_KEY = "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"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "openai/gpt-oss-120b"
 
