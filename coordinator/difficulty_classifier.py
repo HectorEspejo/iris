@@ -145,7 +145,7 @@ class OpenRouterClassifier:
                     "content": classification_prompt
                 }
             ],
-            "max_tokens": 10,
+            "max_tokens": 20,
             "temperature": 0.1
         }
 
