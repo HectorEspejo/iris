@@ -24,6 +24,9 @@
 #   COORDINATOR_URL    - URL del coordinator (default: ws://168.119.10.189:8000/nodes/connect)
 #   FAKE_NODE_TPS      - TPS reportado (default: 5.0)
 #   FAKE_NODE_LOAD     - Load artificial (default: 3)
+#   FAKE_NODE_MODELS   - Modelos de OpenRouter, separados por coma
+#                        Ejemplo: "qwen/qwen-2.5-72b-instruct,meta-llama/llama-3.1-70b-instruct"
+#                        NODE_ID se genera automaticamente como node-{pid} (igual que nodos reales)
 #
 
 set -e
@@ -80,13 +83,32 @@ echo -e "${YELLOW}Reported TPS:${NC} $FAKE_NODE_TPS (penalty: low)"
 echo -e "${YELLOW}Artificial Load:${NC} $FAKE_NODE_LOAD (penalty)"
 echo ""
 
+# Funcion para extraer params del nombre del modelo
+extract_params() {
+    local model="$1"
+    # Buscar patrones como 72b, 70b, 405b, etc.
+    if [[ "$model" =~ ([0-9]+)[bB] ]]; then
+        echo "${BASH_REMATCH[1]}.0"
+    else
+        echo "70.0"  # Default
+    fi
+}
+
 # Array de modelos a iniciar
-# Formato: "NODE_ID:MODEL:TPS:PARAMS"
-MODELS=(
-    "openrouter-qwen-72b:qwen/qwen-2.5-72b-instruct:5.0:72.0"
-    # "openrouter-llama-70b:meta-llama/llama-3.1-70b-instruct:4.0:70.0"
-    # "openrouter-deepseek:deepseek/deepseek-chat:3.0:685.0"
-)
+# Se puede configurar via FAKE_NODE_MODELS en .env (separados por coma)
+DEFAULT_MODEL="qwen/qwen-2.5-72b-instruct"
+
+if [ -n "$FAKE_NODE_MODELS" ]; then
+    echo -e "${BLUE}Using models from FAKE_NODE_MODELS env var${NC}"
+    # Convertir string separado por comas a array
+    IFS=',' read -ra MODELS <<< "$FAKE_NODE_MODELS"
+else
+    echo -e "${BLUE}Using default model${NC}"
+    MODELS=("$DEFAULT_MODEL")
+fi
+
+echo -e "${YELLOW}Models to start:${NC} ${#MODELS[@]}"
+echo ""
 
 # PIDs de los procesos iniciados
 PIDS=()
@@ -107,17 +129,21 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Iniciar cada fake node
-for model_config in "${MODELS[@]}"; do
-    IFS=':' read -r NODE_ID MODEL TPS PARAMS <<< "$model_config"
+for MODEL in "${MODELS[@]}"; do
+    # Limpiar espacios
+    MODEL=$(echo "$MODEL" | xargs)
 
-    echo -e "${GREEN}Starting:${NC} $NODE_ID"
+    # Extraer params del nombre del modelo
+    PARAMS=$(extract_params "$MODEL")
+
+    echo -e "${GREEN}Starting fake node${NC}"
     echo -e "  Model: $MODEL"
-    echo -e "  TPS: $TPS, Params: ${PARAMS}B"
+    echo -e "  TPS: $FAKE_NODE_TPS, Params: ${PARAMS}B"
 
-    NODE_ID="$NODE_ID" \
+    # NODE_ID se genera automaticamente como node-{pid}
     OPENROUTER_MODEL="$MODEL" \
     COORDINATOR_URL="$COORDINATOR_URL" \
-    FAKE_NODE_TPS="$TPS" \
+    FAKE_NODE_TPS="$FAKE_NODE_TPS" \
     FAKE_NODE_ARTIFICIAL_LOAD="$FAKE_NODE_LOAD" \
     FAKE_NODE_PARAMS="$PARAMS" \
     python -m node_agent.node_agent_openrouter &

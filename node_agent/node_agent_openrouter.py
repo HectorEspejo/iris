@@ -19,6 +19,7 @@ Configuracion:
 
 import asyncio
 import os
+import random
 import sys
 import time
 from typing import Optional
@@ -68,6 +69,33 @@ structlog.configure(
 
 logger = structlog.get_logger()
 
+# Lista de GPUs para simular nodos reales
+FAKE_GPU_LIST = [
+    # NVIDIA Consumer
+    "NVIDIA GeForce RTX 4090",
+    "NVIDIA GeForce RTX 4080",
+    "NVIDIA GeForce RTX 4070 Ti",
+    "NVIDIA GeForce RTX 3090",
+    "NVIDIA GeForce RTX 3080 Ti",
+    "NVIDIA GeForce RTX 3080",
+    "NVIDIA GeForce RTX 3070 Ti",
+    # NVIDIA Professional
+    "NVIDIA RTX A6000",
+    "NVIDIA RTX A5000",
+    "NVIDIA RTX A4000",
+    # AMD
+    "AMD Radeon RX 7900 XTX",
+    "AMD Radeon RX 7900 XT",
+    "AMD Radeon RX 6950 XT",
+    "AMD Radeon RX 6900 XT",
+    # Apple Silicon
+    "Apple M2 Ultra",
+    "Apple M2 Max",
+    "Apple M2 Pro",
+    "Apple M3 Max",
+    "Apple M3 Pro",
+]
+
 
 class FakeNodeAgent:
     """
@@ -103,6 +131,7 @@ class FakeNodeAgent:
         self.reported_vram = reported_vram
         self.reported_params = reported_params
         self.key_path = key_path
+        self.gpu_name = random.choice(FAKE_GPU_LIST)
 
         self._client = OpenRouterClient(model=model, api_key=api_key)
         self._ws = None
@@ -130,6 +159,7 @@ class FakeNodeAgent:
             "fake_node_starting",
             node_id=self.node_id,
             model=self.model,
+            gpu=self.gpu_name,
             coordinator=self.coordinator_url,
             reported_tps=self.reported_tps,
             artificial_load=self.artificial_load
@@ -248,7 +278,7 @@ class FakeNodeAgent:
                 max_context=32768,
                 vram_gb=self.reported_vram,
                 available_hours=list(range(24)),
-                gpu_name="OpenRouter Cloud",
+                gpu_name=self.gpu_name,
                 gpu_vram_free=self.reported_vram,
                 model_params=self.reported_params,
                 model_quantization="FP16",  # OpenRouter usa modelos originales
@@ -531,7 +561,7 @@ class FakeNodeAgent:
 async def main():
     """Entry point para el fake node agent."""
     # Configuracion desde variables de entorno
-    node_id = os.environ.get("NODE_ID", f"openrouter-{os.getpid()}")
+    node_id = os.environ.get("NODE_ID", f"node-{os.getpid()}")
     model = os.environ.get("OPENROUTER_MODEL", "qwen/qwen-2.5-72b-instruct")
     coordinator_url = os.environ.get(
         "COORDINATOR_URL",
