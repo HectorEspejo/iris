@@ -274,7 +274,7 @@ class FakeNodeAgent:
                 public_key=node_crypto.public_key,
                 account_key=self.account_key,
                 lmstudio_port=0,  # No LM Studio
-                model_name=f"openrouter:{self.model}",  # Prefix para identificar
+                model_name=self.model,
                 max_context=32768,
                 vram_gb=self.reported_vram,
                 available_hours=list(range(24)),
