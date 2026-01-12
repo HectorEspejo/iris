@@ -8,6 +8,10 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from pydantic import BaseModel as PydanticBaseModel
 from fastapi.middleware.cors import CORSMiddleware

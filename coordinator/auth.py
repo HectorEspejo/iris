@@ -4,6 +4,7 @@ Iris Authentication
 JWT-based authentication for users.
 """
 
+import os
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import Depends, HTTPException, status
@@ -18,8 +19,8 @@ from .database import db
 
 logger = structlog.get_logger()
 
-# Configuration
-SECRET_KEY = "iris-secret-key-change-in-production"  # TODO: Load from env
+# Configuration - Load from environment variables
+SECRET_KEY = os.environ.get("JWT_SECRET", "iris-secret-key-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
