@@ -11,6 +11,7 @@ Iris is a distributed AI inference network where users contribute compute nodes 
 - **Task Difficulty Classification**: Automatic routing via OpenRouter API (SIMPLE, COMPLEX, ADVANCED)
 - **Real-time Streaming**: SSE-based streaming of inference responses to users
 - **Public Chat Interface**: Rate-limited web chat at `/chat`
+- **Multimodal Support**: PDFs via Gemini (OpenRouter), images via vision-capable nodes
 
 ## Development Commands
 
@@ -64,7 +65,7 @@ coordinator/              # Central FastAPI server
 ├── database.py          # SQLite schema and async operations (aiosqlite)
 ├── auth.py              # JWT authentication, bcrypt password hashing
 ├── node_registry.py     # Connected node management, heartbeat tracking, tier selection
-├── task_orchestrator.py # Task division, node assignment, streaming handling
+├── task_orchestrator.py # Task division, node assignment, streaming handling, PDF bypass
 ├── response_aggregator.py # Combines subtask results
 ├── reputation.py        # Node reputation scoring
 ├── economics.py         # Monthly pool distribution
@@ -73,17 +74,23 @@ coordinator/              # Central FastAPI server
 ├── streaming.py         # StreamingManager for real-time SSE responses
 ├── difficulty_classifier.py # OpenRouter-based task difficulty classification
 ├── account_service.py   # Mullvad-style account key management
+├── multimodal_processor.py # PDF processing via Gemini (OpenRouter)
 └── templates/
     ├── dashboard.html   # Network monitoring dashboard
-    └── chat.html        # Public chat interface with streaming
+    └── chat.html        # Public chat interface with streaming and file upload
 
 node_agent/              # Distributed node agents
-├── main.py              # WebSocket connection, task execution, streaming chunks
-├── lmstudio_client.py   # LM Studio API client (streaming support)
+├── main.py              # WebSocket connection, task execution, streaming chunks, vision support
+├── lmstudio_client.py   # LM Studio API client (streaming support, vision API)
+├── node_agent_openrouter.py  # Fake node using OpenRouter (fallback when no real nodes)
+├── openrouter_client.py # OpenRouter API client for fake nodes
 ├── crypto.py            # Node-side encryption
 ├── heartbeat.py         # Periodic heartbeat sender
 ├── gpu_info.py          # GPU detection (NVIDIA/AMD/Apple Silicon)
-└── model_info.py        # Model parameter and quantization parsing
+└── model_info.py        # Model parameter, quantization parsing, vision detection
+
+scripts/                 # Utility scripts
+└── start_fake_nodes.sh  # Start multiple fake nodes with OpenRouter
 
 client/                  # User interfaces
 ├── cli.py               # Typer CLI with Rich output
@@ -117,6 +124,28 @@ User -> POST /api/chat/stream
      -> Coordinator pushes to streaming_manager queue
      -> SSE endpoint yields chunks to browser
      -> Browser updates UI in real-time
+```
+
+### PDF Processing Flow (Gemini Direct)
+```
+User -> POST /api/chat/stream (with PDF)
+     -> task_orchestrator.create_task() detects PDF
+     -> BYPASS subtask pipeline entirely
+     -> multimodal_processor.process_pdf_direct()
+     -> Gemini (OpenRouter) processes PDF with streaming
+     -> streaming_manager receives chunks
+     -> SSE endpoint yields chunks to browser
+```
+
+### Image Processing Flow (Vision Node)
+```
+User -> POST /api/chat/stream (with image)
+     -> task_orchestrator.create_task() detects image
+     -> Select vision-capable node (supports_vision=True)
+     -> TASK_ASSIGN with files=[FileData] sent to node
+     -> Node calls LM Studio vision API (_vision_completion)
+     -> Node sends TASK_STREAM chunks via WebSocket
+     -> SSE endpoint yields chunks to browser
 ```
 
 ## Node Tier System
@@ -155,6 +184,69 @@ Fallback: Local regex-based classifier if OpenRouter unavailable.
 - **Consensus**: Same task to multiple nodes for verification
 - **Context**: Split long documents across nodes
 
+## Multimodal Support
+
+The system supports processing PDFs and images with different pipelines:
+
+### PDF Processing (Gemini Direct)
+- PDFs are processed **directly by Gemini** via OpenRouter API
+- Complete bypass of the subtask/node pipeline
+- Gemini generates the final response (not just context extraction)
+- Streaming support for real-time response delivery
+
+```
+User sends PDF + prompt
+    ↓
+task_orchestrator detects PDF
+    ↓
+Bypass subtask pipeline completely
+    ↓
+multimodal_processor.process_pdf_direct()
+    ↓
+Gemini (OpenRouter) processes PDF and responds
+    ↓
+Streaming response → SSE → User
+```
+
+### Image Processing (Vision Nodes)
+- Images are sent to **vision-capable nodes** (LLaVA, Gemma-3, Qwen-VL, etc.)
+- Uses the standard subtask pipeline
+- Vision capability detected via:
+  1. LM Studio API (`type: "vlm"` or `vision: true`)
+  2. Model name pattern matching (`detect_vision_support()`)
+
+```
+User sends image + prompt
+    ↓
+task_orchestrator detects image
+    ↓
+Select vision-capable node (supports_vision=True)
+    ↓
+Send TASK_ASSIGN with files to node
+    ↓
+Node uses LM Studio vision API
+    ↓
+Streaming response → WebSocket → SSE → User
+```
+
+### Supported File Types
+| Type | Processing | Handler |
+|------|------------|---------|
+| PDF (`.pdf`) | Gemini Direct | `multimodal_processor.py` |
+| JPEG (`.jpg`, `.jpeg`) | Vision Node | `lmstudio_client.py` |
+| PNG (`.png`) | Vision Node | `lmstudio_client.py` |
+| WebP (`.webp`) | Vision Node | `lmstudio_client.py` |
+| GIF (`.gif`) | Vision Node | `lmstudio_client.py` |
+
+### Vision-Capable Models
+Models detected as vision-capable include:
+- LLaVA family (llava, llava-1.5, llava-1.6, llava-next)
+- Qwen-VL (qwen-vl, qwen2-vl, qwen2.5-vl)
+- Gemma 3 (gemma-3, gemma3)
+- MiniCPM-V, Pixtral, Moondream, CogVLM
+- Phi-3 Vision, Llama 3.2 Vision
+- Any model with `-vision`, `-vl-`, or `multimodal` in the name
+
 ## Cryptography
 
 All payloads are encrypted end-to-end using:
@@ -168,7 +260,9 @@ All payloads are encrypted end-to-end using:
 - `DATABASE_URL` - SQLite path (default: `sqlite:///data/iris.db`)
 - `JWT_SECRET` - JWT signing secret
 - `COORDINATOR_PRIVATE_KEY_PATH` - Key file path
-- `OPENROUTER_API_KEY` - API key for difficulty classification
+- `OPENROUTER_API_KEY` - API key for difficulty classification and PDF processing (Gemini)
+- `GEMINI_MODEL` - Model for PDF processing (default: `google/gemini-2.5-flash`)
+- `MULTIMODAL_TIMEOUT` - Timeout for multimodal processing (default: 120 seconds)
 
 **Node Agent:**
 - `IRIS_ACCOUNT_KEY` - **Required** Mullvad-style account key (16 digits)
@@ -203,7 +297,7 @@ Nodes start at 100 points (minimum 10). Key changes:
 ## WebSocket Protocol Messages
 
 **Node -> Coordinator:**
-- `NODE_REGISTER` - Initial registration with capabilities
+- `NODE_REGISTER` - Initial registration with capabilities (includes `supports_vision` flag)
 - `NODE_HEARTBEAT` - Periodic health check
 - `TASK_RESULT` - Completed task response
 - `TASK_ERROR` - Task failure notification
@@ -213,7 +307,7 @@ Nodes start at 100 points (minimum 10). Key changes:
 **Coordinator -> Node:**
 - `REGISTER_ACK` - Registration confirmation
 - `HEARTBEAT_ACK` - Heartbeat acknowledgment
-- `TASK_ASSIGN` - New task assignment (with `enable_streaming` flag)
+- `TASK_ASSIGN` - New task assignment (with `enable_streaming` flag, optional `files` for vision)
 - `CLASSIFY_ASSIGN` - Classification task assignment
 
 ## Account Key System
@@ -224,3 +318,53 @@ Mullvad-style anonymous authentication:
 - Generated via `POST /accounts/generate`
 - Verified via `POST /accounts/verify`
 - Links nodes to accounts for reputation tracking
+
+## Fake Nodes (OpenRouter Fallback)
+
+"Fake nodes" are virtual nodes that use OpenRouter API instead of LM Studio. They provide always-available inference capacity as fallback when no real nodes are connected.
+
+### How it Works
+- Fake nodes connect via WebSocket just like real nodes
+- They call OpenRouter API instead of LM Studio for inference
+- They have **built-in penalties** to ensure real nodes are preferred
+
+### Penalty Mechanism
+The `select_nodes_v3()` algorithm prefers real nodes via:
+
+| Factor | Real Node | Fake Node | Effect |
+|--------|-----------|-----------|--------|
+| `tokens_per_second` | 20-50 | 5 | Higher expected_delay for fake |
+| `current_load` | Actual | +3 artificial | Lower score for fake |
+| Result | ~0.90 score | ~0.73 score | **~17% less selection probability** |
+
+### Running Fake Nodes
+
+```bash
+# Single fake node
+export OPENROUTER_API_KEY="sk-or-v1-..."
+export IRIS_ACCOUNT_KEY="1234 5678 9012 3456"
+export OPENROUTER_MODEL="qwen/qwen-2.5-72b-instruct"
+python -m node_agent.node_agent_openrouter
+
+# Multiple fake nodes
+./scripts/start_fake_nodes.sh
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENROUTER_API_KEY` | Yes | - | OpenRouter API key |
+| `IRIS_ACCOUNT_KEY` | Yes | - | Account key for authentication |
+| `OPENROUTER_MODEL` | No | `qwen/qwen-2.5-72b-instruct` | Model to use |
+| `NODE_ID` | No | `openrouter-{pid}` | Unique node ID |
+| `FAKE_NODE_TPS` | No | `5.0` | Reported TPS (low = penalty) |
+| `FAKE_NODE_ARTIFICIAL_LOAD` | No | `3` | Artificial load in heartbeats |
+
+### Recommended Models
+
+| Model | OpenRouter ID | Use Case |
+|-------|---------------|----------|
+| Qwen 2.5 72B | `qwen/qwen-2.5-72b-instruct` | General, code |
+| Llama 3.1 70B | `meta-llama/llama-3.1-70b-instruct` | General |
+| DeepSeek V3 | `deepseek/deepseek-chat` | Code, reasoning |
