@@ -2,14 +2,18 @@
 Iris Multimodal Processor
 
 Procesa archivos PDF usando Gemini via OpenRouter.
-Genera resúmenes contextuales para enriquecer los prompts enviados a los nodos.
 
-NOTA: Las imágenes se procesan directamente en nodos con modelos multimodales
-(LLaVA, Qwen-VL, etc.) y no pasan por este procesador.
+Modo de operación:
+- PDFs: Se procesan COMPLETAMENTE con Gemini (respuesta directa)
+- Imágenes: Se envían a nodos con modelos multimodales (LLaVA, Qwen-VL, etc.)
+
+Cuando hay un PDF, Gemini genera la respuesta final directamente.
+No se usa el pipeline de subtasks/nodos para PDFs.
 """
 
 import os
-from typing import List, Optional
+import asyncio
+from typing import List, Optional, AsyncGenerator
 import httpx
 import structlog
 
@@ -30,8 +34,8 @@ class MultimodalProcessor:
 
     Pipeline para PDFs:
     1. Recibe PDFs adjuntos + prompt del usuario
-    2. Envía a Gemini para análisis y extracción de contexto
-    3. Construye prompt enriquecido para los nodos LM Studio
+    2. Envía a Gemini para generar respuesta completa (NO solo contexto)
+    3. Hace streaming de la respuesta directamente al usuario
 
     NOTA: Las imágenes NO se procesan aquí. Se envían directamente
     a nodos con modelos multimodales (LLaVA, Qwen-VL, etc.)
@@ -44,6 +48,220 @@ class MultimodalProcessor:
     ):
         self.model = model
         self.timeout = timeout
+
+    async def process_pdf_direct(
+        self,
+        pdfs: List[FileAttachment],
+        user_prompt: str,
+        stream_callback: Optional[callable] = None
+    ) -> str:
+        """
+        Procesa PDFs con Gemini y responde DIRECTAMENTE la pregunta del usuario.
+
+        Este método genera la respuesta final completa, no solo contexto.
+        Bypasses el pipeline de subtasks/nodos.
+
+        Args:
+            pdfs: Lista de archivos PDF
+            user_prompt: Prompt del usuario
+            stream_callback: Callback async para streaming de chunks
+
+        Returns:
+            Respuesta completa de Gemini
+        """
+        if not pdfs:
+            return "No se proporcionaron archivos PDF."
+
+        if not OPENROUTER_API_KEY:
+            logger.warning("openrouter_api_key_not_set_for_pdf")
+            return "Error: No se puede procesar el PDF. API key no configurada."
+
+        logger.info(
+            "processing_pdf_direct",
+            file_count=len(pdfs),
+            total_size_mb=sum(f.size_bytes for f in pdfs) / 1024 / 1024,
+            model=self.model,
+            streaming=stream_callback is not None
+        )
+
+        try:
+            # Construir contenido para Gemini
+            content_parts = self._build_direct_content(pdfs, user_prompt)
+
+            # Si hay callback de streaming, usar streaming API
+            if stream_callback:
+                return await self._call_gemini_streaming(content_parts, stream_callback)
+            else:
+                return await self._call_gemini_direct(content_parts)
+
+        except Exception as e:
+            logger.error("pdf_direct_processing_error", error=str(e))
+            error_msg = f"Error al procesar el PDF: {str(e)}"
+            if stream_callback:
+                await stream_callback(error_msg)
+            return error_msg
+
+    def _build_direct_content(
+        self,
+        pdfs: List[FileAttachment],
+        user_prompt: str
+    ) -> List[dict]:
+        """Construye contenido para respuesta directa (no extracción de contexto)."""
+
+        content_parts = []
+
+        # Instrucción para Gemini - responder directamente
+        system_prompt = f"""Eres un asistente útil. El usuario te ha proporcionado documentos PDF adjuntos y una pregunta.
+
+INSTRUCCIONES:
+1. Lee y analiza cuidadosamente los documentos PDF adjuntos
+2. Responde la pregunta del usuario de forma completa y precisa
+3. Basa tu respuesta en el contenido de los documentos
+4. Si los documentos no contienen información relevante, indícalo
+5. Sé claro, conciso y estructurado en tu respuesta
+
+PREGUNTA DEL USUARIO:
+{user_prompt}"""
+
+        content_parts.append({"type": "text", "text": system_prompt})
+
+        # Agregar PDFs
+        for pdf in pdfs:
+            if pdf.is_pdf:
+                content_parts.append({
+                    "type": "file",
+                    "file": {
+                        "filename": pdf.filename,
+                        "file_data": f"data:application/pdf;base64,{pdf.content_base64}"
+                    }
+                })
+                logger.debug(
+                    "added_pdf_for_direct_response",
+                    filename=pdf.filename,
+                    size_kb=pdf.size_bytes / 1024
+                )
+
+        return content_parts
+
+    async def _call_gemini_direct(self, content_parts: List[dict]) -> str:
+        """Llama a Gemini para respuesta directa (sin streaming)."""
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content_parts
+                }
+            ],
+            "max_tokens": 8192,
+            "temperature": 0.7,
+            "plugins": [
+                {
+                    "id": "file-parser",
+                    "pdf": {"engine": "native"}
+                }
+            ]
+        }
+
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://iris.network",
+            "X-Title": "Iris PDF Processor"
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                json=payload,
+                headers=headers
+            )
+
+            if response.status_code != 200:
+                error_text = response.text[:500]
+                raise Exception(f"Gemini API error ({response.status_code}): {error_text}")
+
+            data = response.json()
+            choices = data.get("choices", [])
+            if not choices:
+                raise Exception("No choices in Gemini response")
+
+            return choices[0].get("message", {}).get("content", "")
+
+    async def _call_gemini_streaming(
+        self,
+        content_parts: List[dict],
+        stream_callback: callable
+    ) -> str:
+        """Llama a Gemini con streaming y envía chunks via callback."""
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content_parts
+                }
+            ],
+            "max_tokens": 8192,
+            "temperature": 0.7,
+            "stream": True,
+            "plugins": [
+                {
+                    "id": "file-parser",
+                    "pdf": {"engine": "native"}
+                }
+            ]
+        }
+
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://iris.network",
+            "X-Title": "Iris PDF Processor"
+        }
+
+        full_response = ""
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with client.stream(
+                "POST",
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                json=payload,
+                headers=headers
+            ) as response:
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    raise Exception(f"Gemini API error ({response.status_code}): {error_text[:500]}")
+
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+
+                    data_str = line[6:]  # Remove "data: " prefix
+                    if data_str == "[DONE]":
+                        break
+
+                    try:
+                        import json
+                        data = json.loads(data_str)
+                        choices = data.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_response += content
+                                await stream_callback(content)
+                    except json.JSONDecodeError:
+                        continue
+
+        logger.info(
+            "gemini_streaming_complete",
+            response_length=len(full_response)
+        )
+
+        return full_response
 
     async def process_pdfs(
         self,

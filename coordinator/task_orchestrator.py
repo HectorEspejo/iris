@@ -98,75 +98,95 @@ class TaskOrchestrator:
         """
         task_id = generate_id()
 
-        # Process files:
-        # - PDFs: Always processed by Gemini (LM Studio API doesn't support PDFs)
-        # - Images: Sent directly to vision-capable nodes
-        processed_prompt = prompt
+        # Separate files by type
         has_files = bool(files)
-        vision_files = []  # Only images go to vision nodes
+        images = []
+        pdfs = []
 
         if files:
             images = [f for f in files if f.is_image]
             pdfs = [f for f in files if f.is_pdf]
-
-            # Log current vision nodes status
-            all_connected_nodes = node_registry.get_all_nodes()
-            vision_nodes = node_registry.get_vision_capable_nodes()
 
             logger.info(
                 "processing_files",
                 task_id=task_id,
                 image_count=len(images),
                 pdf_count=len(pdfs),
-                total_size_mb=sum(f.size_bytes for f in files) / 1024 / 1024,
-                total_connected_nodes=len(all_connected_nodes),
-                vision_capable_nodes=len(vision_nodes),
-                vision_node_ids=[n.node_id for n in vision_nodes],
-                vision_node_models=[n.model_name for n in vision_nodes]
+                total_size_mb=sum(f.size_bytes for f in files) / 1024 / 1024
             )
 
-            # PDFs: Always process with Gemini (LM Studio doesn't support PDF input)
-            if pdfs:
-                from .multimodal_processor import multimodal_processor
-                processed_prompt = await multimodal_processor.process_pdfs(
-                    pdfs=pdfs,
-                    user_prompt=prompt
-                )
+        # PDF HANDLING: Complete bypass of subtask pipeline
+        # PDFs go directly to Gemini - no subtasks, no node assignment
+        if pdfs:
+            logger.info(
+                "pdf_detected_using_gemini_direct",
+                task_id=task_id,
+                pdf_count=len(pdfs),
+                pdf_names=[p.filename for p in pdfs]
+            )
+
+            # Create task in database
+            task = await db.create_task(
+                id=task_id,
+                user_id=user_id,
+                mode="gemini_direct",  # Special mode for PDF handling
+                original_prompt=prompt,
+                difficulty=TaskDifficulty.ADVANCED.value,
+                has_files=True
+            )
+
+            # Create streaming queue
+            if enable_streaming:
+                streaming_manager.create_stream(task_id)
+
+            # Process PDF directly with Gemini (no subtasks, no nodes)
+            asyncio.create_task(self._process_pdf_direct(
+                task_id=task_id,
+                pdfs=pdfs,
+                prompt=prompt,
+                enable_streaming=enable_streaming
+            ))
+
+            return task
+
+        # IMAGES: Send to vision-capable nodes (existing logic)
+        vision_files = []
+        processed_prompt = prompt
+
+        if images:
+            vision_nodes = node_registry.get_vision_capable_nodes()
+
+            logger.info(
+                "images_detected",
+                task_id=task_id,
+                image_count=len(images),
+                vision_nodes_available=len(vision_nodes)
+            )
+
+            if vision_nodes:
+                vision_files = images
                 logger.info(
-                    "pdfs_processed_via_gemini",
+                    "images_will_be_sent_to_vision_nodes",
                     task_id=task_id,
-                    pdf_count=len(pdfs),
-                    original_prompt_length=len(prompt),
-                    processed_prompt_length=len(processed_prompt)
+                    image_count=len(images),
+                    image_names=[f.filename for f in images]
                 )
+            else:
+                # No vision nodes - cannot process images
+                image_names = ", ".join(f.filename for f in images)
+                processed_prompt = f"""NOTA: El usuario adjuntó imágenes ({image_names}) pero no hay nodos con capacidad de visión disponibles. No es posible procesar las imágenes en este momento.
 
-            # Images: Send to vision-capable nodes if available
-            if images:
-                if vision_nodes:
-                    vision_files = images  # Only images, not PDFs
-                    logger.info(
-                        "images_will_be_sent_to_vision_nodes",
-                        task_id=task_id,
-                        image_count=len(images),
-                        image_names=[f.filename for f in images]
-                    )
-                else:
-                    # No vision nodes - cannot process images
-                    image_names = ", ".join(f.filename for f in images)
-                    processed_prompt = f"""NOTA: El usuario adjuntó imágenes ({image_names}) pero no hay nodos con capacidad de visión disponibles. No es posible procesar las imágenes en este momento.
-
-{processed_prompt}"""
-                    logger.warning(
-                        "images_cannot_be_processed_no_vision_nodes",
-                        task_id=task_id,
-                        image_count=len(images)
-                    )
+{prompt}"""
+                logger.warning(
+                    "images_cannot_be_processed_no_vision_nodes",
+                    task_id=task_id,
+                    image_count=len(images)
+                )
 
             # Tasks with files are always ADVANCED
             difficulty = TaskDifficulty.ADVANCED
 
         # Auto-classify difficulty using LLM if not provided
-        # Falls back to local classifier if no BASIC nodes available
         if difficulty is None:
             difficulty = await classify_task_difficulty_async(
                 prompt=processed_prompt,
@@ -198,12 +218,87 @@ class TaskOrchestrator:
             has_files=has_files
         )
 
-        # Start processing in background (use processed_prompt for multimodal tasks)
+        # Start processing in background
         asyncio.create_task(self._process_task(
             task_id, processed_prompt, mode, difficulty, enable_streaming, vision_files
         ))
 
         return task
+
+    async def _process_pdf_direct(
+        self,
+        task_id: str,
+        pdfs: List[FileAttachment],
+        prompt: str,
+        enable_streaming: bool = False
+    ) -> None:
+        """
+        Process PDFs directly with Gemini - complete bypass of node pipeline.
+
+        This method:
+        1. Sends PDFs + prompt to Gemini via OpenRouter
+        2. Streams response chunks directly to the user
+        3. Marks task as complete
+        4. Does NOT create subtasks or assign to nodes
+        """
+        try:
+            # Update status to processing
+            await db.update_task_status(task_id, TaskStatus.PROCESSING.value)
+
+            from .multimodal_processor import multimodal_processor
+
+            # Define streaming callback
+            async def stream_callback(chunk: str):
+                if enable_streaming:
+                    await streaming_manager.push_chunk(task_id, chunk)
+
+            logger.info(
+                "starting_gemini_direct_processing",
+                task_id=task_id,
+                pdf_count=len(pdfs),
+                streaming=enable_streaming
+            )
+
+            # Process PDFs directly with Gemini
+            final_response = await multimodal_processor.process_pdf_direct(
+                pdfs=pdfs,
+                user_prompt=prompt,
+                stream_callback=stream_callback if enable_streaming else None
+            )
+
+            # Update task with final response
+            await db.update_task_status(
+                task_id,
+                TaskStatus.COMPLETED.value,
+                final_response=final_response
+            )
+
+            # Complete the stream
+            if enable_streaming:
+                await streaming_manager.complete_stream(
+                    task_id,
+                    final_response=final_response
+                )
+
+            logger.info(
+                "pdf_task_completed_via_gemini",
+                task_id=task_id,
+                response_length=len(final_response)
+            )
+
+        except Exception as e:
+            logger.error(
+                "pdf_direct_processing_failed",
+                task_id=task_id,
+                error=str(e)
+            )
+            await db.update_task_status(task_id, TaskStatus.FAILED.value)
+
+            if enable_streaming:
+                await streaming_manager.complete_stream(
+                    task_id,
+                    error=f"Error processing PDF: {str(e)}"
+                )
 
     async def _process_task(
         self,
