@@ -108,12 +108,20 @@ class TaskOrchestrator:
             images = [f for f in files if f.is_image]
             pdfs = [f for f in files if f.is_pdf]
 
+            # Log current vision nodes status when processing files
+            all_connected_nodes = node_registry.get_all_nodes()
+            vision_nodes = node_registry.get_vision_capable_nodes()
+
             logger.info(
                 "processing_files",
                 task_id=task_id,
                 image_count=len(images),
                 pdf_count=len(pdfs),
-                total_size_mb=sum(f.size_bytes for f in files) / 1024 / 1024
+                total_size_mb=sum(f.size_bytes for f in files) / 1024 / 1024,
+                total_connected_nodes=len(all_connected_nodes),
+                vision_capable_nodes=len(vision_nodes),
+                vision_node_ids=[n.node_id for n in vision_nodes],
+                vision_node_models=[n.model_name for n in vision_nodes]
             )
 
             # Process PDFs with Gemini (images go directly to vision-capable nodes)
@@ -130,21 +138,14 @@ class TaskOrchestrator:
                     processed_prompt_length=len(processed_prompt)
                 )
 
-            # Check if we have images but no vision-capable nodes
+            # Log image handling - images will be sent directly to vision-capable nodes
             if images:
-                vision_nodes = node_registry.get_vision_capable_nodes()
-                if not vision_nodes:
-                    logger.warning(
-                        "no_vision_nodes_available",
-                        task_id=task_id,
-                        image_count=len(images)
-                    )
-                    # Add a note to the prompt about the images
-                    image_names = ", ".join(f.filename for f in images)
-                    processed_prompt = f"""NOTA: El usuario adjuntó imágenes ({image_names}) pero no hay nodos con capacidad de visión disponibles. No es posible procesar las imágenes en este momento.
-
-{processed_prompt}"""
-                    images = []  # Clear images since we can't process them
+                logger.info(
+                    "images_detected_for_vision_processing",
+                    task_id=task_id,
+                    image_count=len(images),
+                    image_names=[f.filename for f in images]
+                )
 
             # Tasks with files are always ADVANCED
             difficulty = TaskDifficulty.ADVANCED
@@ -246,6 +247,18 @@ class TaskOrchestrator:
                 enable_streaming,
                 images=images
             )
+
+            # Check if assignment failed for vision tasks
+            if not assignments and images:
+                error_msg = "No hay nodos con capacidad de visión disponibles para procesar las imágenes. Por favor, inténtalo más tarde cuando haya un nodo con modelo de visión (LLaVA, Gemma-3, etc.) conectado."
+                logger.error(
+                    "vision_task_failed_no_nodes",
+                    task_id=task_id,
+                    image_count=len(images)
+                )
+                await db.update_task_status(task_id, TaskStatus.FAILED.value)
+                await streaming_manager.complete_stream(task_id, error=error_msg)
+                return
 
             # Wait for all subtasks to complete with individual timeouts
             # Each subtask gets its own timeout, and can be reassigned on failure
@@ -447,17 +460,38 @@ class TaskOrchestrator:
         excluded = excluded_nodes.copy() if excluded_nodes else set()
         require_vision = bool(images)
 
+        # Log vision requirement
+        if require_vision:
+            all_vision_nodes = node_registry.get_vision_capable_nodes()
+            logger.info(
+                "vision_required_for_task",
+                subtask_id=subtask["id"],
+                image_count=len(images),
+                total_vision_nodes=len(all_vision_nodes),
+                vision_node_ids=[n.node_id for n in all_vision_nodes]
+            )
+
         for attempt in range(MAX_RETRIES):
-            # Select a node - if images present, only select vision-capable nodes
+            # PRIORITY: If images are present, ONLY select vision-capable nodes
+            # This takes precedence over difficulty-based selection
             if require_vision:
                 # Get vision-capable nodes that are not excluded
                 vision_nodes = [
                     n for n in node_registry.get_vision_capable_nodes()
                     if n.node_id not in excluded and circuit_breaker.is_available(n.node_id)
                 ]
+
+                logger.info(
+                    "selecting_vision_node",
+                    subtask_id=subtask["id"],
+                    attempt=attempt + 1,
+                    available_vision_nodes=len(vision_nodes),
+                    excluded_count=len(excluded)
+                )
+
                 nodes = vision_nodes[:1] if vision_nodes else []
             else:
-                # Select a node using SED + P2C algorithm
+                # No images - select a node using SED + P2C algorithm based on difficulty
                 nodes = await node_registry.select_nodes_v3(
                     difficulty=difficulty,
                     n=1,
@@ -465,6 +499,19 @@ class TaskOrchestrator:
                 )
 
             if not nodes:
+                if require_vision:
+                    # Special handling for vision tasks - be explicit about the issue
+                    logger.error(
+                        "no_vision_nodes_available_for_images",
+                        subtask_id=subtask["id"],
+                        image_count=len(images),
+                        attempt=attempt + 1,
+                        message="Task has images but no vision-capable nodes are connected"
+                    )
+                    # Don't retry for vision - if no vision nodes, fail immediately
+                    # This prevents falling back to non-vision nodes
+                    return False, None
+
                 if attempt < MAX_RETRIES - 1:
                     # Wait with exponential backoff before retry
                     delay = RETRY_BASE_DELAY * (2 ** attempt)

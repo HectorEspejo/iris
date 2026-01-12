@@ -301,6 +301,11 @@ def detect_vision_support(model_name: str) -> bool:
             )
             return True
 
+    logger.debug(
+        "vision_support_not_detected",
+        model=model_name,
+        model_lower=name_lower
+    )
     return False
 
 
