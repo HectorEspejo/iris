@@ -1,8 +1,11 @@
 """
 Iris Multimodal Processor
 
-Procesa archivos PDF e imágenes usando Gemini via OpenRouter.
+Procesa archivos PDF usando Gemini via OpenRouter.
 Genera resúmenes contextuales para enriquecer los prompts enviados a los nodos.
+
+NOTA: Las imágenes se procesan directamente en nodos con modelos multimodales
+(LLaVA, Qwen-VL, etc.) y no pasan por este procesador.
 """
 
 import os
@@ -23,12 +26,15 @@ MULTIMODAL_TIMEOUT = int(os.environ.get("MULTIMODAL_TIMEOUT", "120"))
 
 class MultimodalProcessor:
     """
-    Procesa archivos multimodales (PDFs e imágenes) usando Gemini.
+    Procesa archivos PDF usando Gemini.
 
-    Pipeline:
-    1. Recibe archivos adjuntos + prompt del usuario
+    Pipeline para PDFs:
+    1. Recibe PDFs adjuntos + prompt del usuario
     2. Envía a Gemini para análisis y extracción de contexto
     3. Construye prompt enriquecido para los nodos LM Studio
+
+    NOTA: Las imágenes NO se procesan aquí. Se envían directamente
+    a nodos con modelos multimodales (LLaVA, Qwen-VL, etc.)
     """
 
     def __init__(
@@ -39,38 +45,46 @@ class MultimodalProcessor:
         self.model = model
         self.timeout = timeout
 
-    async def process_files(
+    async def process_pdfs(
         self,
-        files: List[FileAttachment],
+        pdfs: List[FileAttachment],
         user_prompt: str
     ) -> str:
         """
-        Procesa archivos con Gemini y retorna prompt enriquecido.
+        Procesa PDFs con Gemini y retorna prompt enriquecido.
+
+        NOTA: Este método solo procesa PDFs. Las imágenes se envían
+        directamente a nodos con modelos multimodales.
 
         Args:
-            files: Lista de archivos adjuntos
+            pdfs: Lista de archivos PDF
             user_prompt: Prompt original del usuario
 
         Returns:
-            Prompt enriquecido con el contexto extraído de los archivos
+            Prompt enriquecido con el contexto extraído de los PDFs
         """
-        if not files:
+        if not pdfs:
+            return user_prompt
+
+        # Filtrar solo PDFs
+        pdf_files = [f for f in pdfs if f.is_pdf]
+        if not pdf_files:
             return user_prompt
 
         if not OPENROUTER_API_KEY:
             logger.warning("openrouter_api_key_not_set")
-            return self._fallback_prompt(files, user_prompt)
+            return self._fallback_prompt(pdf_files, user_prompt)
 
         logger.info(
-            "processing_multimodal_files",
-            file_count=len(files),
-            total_size_mb=sum(f.size_bytes for f in files) / 1024 / 1024,
+            "processing_pdf_files",
+            file_count=len(pdf_files),
+            total_size_mb=sum(f.size_bytes for f in pdf_files) / 1024 / 1024,
             model=self.model
         )
 
         try:
-            # Construir contenido multimodal para Gemini
-            content_parts = self._build_content_parts(files, user_prompt)
+            # Construir contenido para Gemini (solo PDFs)
+            content_parts = self._build_content_parts(pdf_files, user_prompt)
 
             # Enviar a Gemini via OpenRouter
             gemini_response = await self._call_gemini(content_parts)
@@ -79,11 +93,11 @@ class MultimodalProcessor:
             enriched_prompt = self._build_enriched_prompt(
                 user_prompt,
                 gemini_response,
-                files
+                pdf_files
             )
 
             logger.info(
-                "multimodal_processing_complete",
+                "pdf_processing_complete",
                 response_length=len(gemini_response),
                 enriched_prompt_length=len(enriched_prompt)
             )
@@ -91,36 +105,35 @@ class MultimodalProcessor:
             return enriched_prompt
 
         except Exception as e:
-            logger.error("multimodal_processing_error", error=str(e))
+            logger.error("pdf_processing_error", error=str(e))
             # Fallback: retornar prompt indicando que hay archivos
-            return self._fallback_prompt(files, user_prompt)
+            return self._fallback_prompt(pdf_files, user_prompt)
 
     def _build_content_parts(
         self,
-        files: List[FileAttachment],
+        pdfs: List[FileAttachment],
         user_prompt: str
     ) -> List[dict]:
-        """Construye las partes del contenido multimodal para Gemini."""
+        """Construye las partes del contenido para Gemini (solo PDFs)."""
 
         content_parts = []
 
         # Instrucción para Gemini
-        analysis_prompt = f"""Analiza los siguientes archivos en relación a esta consulta del usuario:
+        analysis_prompt = f"""Analiza los siguientes documentos PDF en relación a esta consulta del usuario:
 
 CONSULTA DEL USUARIO: {user_prompt}
 
 INSTRUCCIONES:
-1. Examina cada archivo adjunto cuidadosamente
+1. Examina cada documento PDF cuidadosamente
 2. Extrae la información relevante para responder la consulta
 3. Proporciona un resumen estructurado del contenido
 4. Identifica datos clave, cifras, conceptos importantes
-5. Si hay imágenes, describe su contenido visual relevante
-6. Si hay PDFs, extrae el texto y estructura principales
-7. NO respondas la pregunta directamente, solo proporciona el contexto extraído
+5. Extrae el texto y estructura principales
+6. NO respondas la pregunta directamente, solo proporciona el contexto extraído
 
 FORMATO DE RESPUESTA:
 ## Análisis del Contenido
-[Resumen del contenido de los archivos]
+[Resumen del contenido de los documentos]
 
 ## Información Clave Extraída
 [Datos, cifras y conceptos importantes]
@@ -130,34 +143,20 @@ FORMATO DE RESPUESTA:
 
         content_parts.append({"type": "text", "text": analysis_prompt})
 
-        # Agregar archivos
-        for file in files:
-            if file.is_image:
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{file.mime_type};base64,{file.content_base64}"
-                    }
-                })
-                logger.debug(
-                    "added_image_to_request",
-                    filename=file.filename,
-                    mime_type=file.mime_type,
-                    size_kb=file.size_bytes / 1024
-                )
-
-            elif file.is_pdf:
+        # Agregar PDFs
+        for pdf in pdfs:
+            if pdf.is_pdf:
                 content_parts.append({
                     "type": "file",
                     "file": {
-                        "filename": file.filename,
-                        "file_data": f"data:application/pdf;base64,{file.content_base64}"
+                        "filename": pdf.filename,
+                        "file_data": f"data:application/pdf;base64,{pdf.content_base64}"
                     }
                 })
                 logger.debug(
                     "added_pdf_to_request",
-                    filename=file.filename,
-                    size_kb=file.size_bytes / 1024
+                    filename=pdf.filename,
+                    size_kb=pdf.size_bytes / 1024
                 )
 
         return content_parts

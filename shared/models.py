@@ -128,6 +128,8 @@ class NodeCapabilities(BaseModel):
     model_quantization: str = "Q4"
     tokens_per_second: float = 0.0
     latency_avg_ms: float = 0.0
+    # Multimodal capabilities
+    supports_vision: bool = False  # True if model can process images (LLaVA, Qwen-VL, etc.)
 
 
 class NodeBase(BaseModel):

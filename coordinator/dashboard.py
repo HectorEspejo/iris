@@ -160,7 +160,8 @@ async def dashboard(request: Request):
             "model_params": node.model_params,
             "model_quantization": node.model_quantization,
             "tokens_per_second": node.tokens_per_second,
-            "node_tier": node.node_tier.value if hasattr(node.node_tier, 'value') else node.node_tier
+            "node_tier": node.node_tier.value if hasattr(node.node_tier, 'value') else node.node_tier,
+            "supports_vision": node.supports_vision
         })
 
     # Get all nodes for leaderboard

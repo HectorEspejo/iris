@@ -208,6 +208,8 @@ class ConnectedNode:
     model_quantization: str = "Q4"
     tokens_per_second: float = 0.0
     node_tier: NodeTier = NodeTier.BASIC
+    # Multimodal capabilities
+    supports_vision: bool = False  # Can process images (LLaVA, Qwen-VL, etc.)
 
 
 def calculate_node_tier(
@@ -298,6 +300,10 @@ class NodeRegistry:
     def get_all_nodes(self) -> list[ConnectedNode]:
         """Get all connected nodes."""
         return list(self._nodes.values())
+
+    def get_vision_capable_nodes(self) -> list[ConnectedNode]:
+        """Get all connected nodes that support vision/image processing."""
+        return [n for n in self._nodes.values() if n.supports_vision]
 
     def is_online(self, node_id: str) -> bool:
         """Check if a node is currently online."""
@@ -504,7 +510,8 @@ class NodeRegistry:
                     model_params=payload.model_params,
                     model_quantization=payload.model_quantization,
                     tokens_per_second=payload.tokens_per_second,
-                    node_tier=node_tier.value
+                    node_tier=node_tier.value,
+                    supports_vision=payload.supports_vision
                 )
 
                 # Link node to account if authenticated via account_key
@@ -523,7 +530,8 @@ class NodeRegistry:
                     model_params=payload.model_params,
                     model_quantization=payload.model_quantization,
                     tokens_per_second=payload.tokens_per_second,
-                    node_tier=node_tier
+                    node_tier=node_tier,
+                    supports_vision=payload.supports_vision
                 )
 
             # Send acknowledgment
@@ -544,6 +552,7 @@ class NodeRegistry:
                 gpu=payload.gpu_name,
                 params_b=payload.model_params,
                 tier=node_tier.value,
+                supports_vision=payload.supports_vision,
                 account_id=account_id
             )
             return payload.node_id

@@ -56,6 +56,8 @@ class NodeRegisterPayload(BaseModel):
     model_params: float = 7.0  # Billions of parameters
     model_quantization: str = "Q4"
     tokens_per_second: float = 0.0
+    # Multimodal capabilities
+    supports_vision: bool = False  # True if model can process images
 
 
 class RegisterAckPayload(BaseModel):
@@ -84,6 +86,13 @@ class HeartbeatAckPayload(BaseModel):
     server_time: datetime = Field(default_factory=datetime.utcnow)
 
 
+class ImageData(BaseModel):
+    """Image data for vision tasks."""
+    filename: str
+    mime_type: str  # image/jpeg, image/png, etc.
+    content_base64: str
+
+
 class TaskAssignPayload(BaseModel):
     """Payload for TASK_ASSIGN message."""
     subtask_id: str
@@ -91,6 +100,8 @@ class TaskAssignPayload(BaseModel):
     encrypted_prompt: str  # Encrypted with node's public key
     timeout_seconds: int = 60
     enable_streaming: bool = False  # If True, node sends TASK_STREAM chunks
+    # Multimodal: images for vision-capable models
+    images: Optional[list[ImageData]] = None  # Images to process (unencrypted)
 
 
 class TaskResultPayload(BaseModel):

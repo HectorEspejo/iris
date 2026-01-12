@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     model_params REAL DEFAULT 7.0,
     model_quantization TEXT DEFAULT 'Q4',
     tokens_per_second REAL DEFAULT 0.0,
-    node_tier TEXT DEFAULT 'basic'
+    node_tier TEXT DEFAULT 'basic',
+    supports_vision BOOLEAN DEFAULT FALSE
 );
 
 -- Node availability schedule
@@ -193,6 +194,8 @@ MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id)",
     # Add has_files column to tasks for multimodal support
     "ALTER TABLE tasks ADD COLUMN has_files BOOLEAN DEFAULT FALSE",
+    # Add supports_vision column to nodes for multimodal models
+    "ALTER TABLE nodes ADD COLUMN supports_vision BOOLEAN DEFAULT FALSE",
 ]
 
 
@@ -303,7 +306,8 @@ class Database:
         model_params: float = 7.0,
         model_quantization: str = "Q4",
         tokens_per_second: float = 0.0,
-        node_tier: str = "basic"
+        node_tier: str = "basic",
+        supports_vision: bool = False
     ) -> dict[str, Any]:
         """Create or update a node."""
         await self.conn.execute(
@@ -311,9 +315,9 @@ class Database:
             INSERT INTO nodes (
                 id, owner_id, public_key, model_name, max_context, vram_gb,
                 lmstudio_port, last_seen_at, gpu_name, model_params,
-                model_quantization, tokens_per_second, node_tier
+                model_quantization, tokens_per_second, node_tier, supports_vision
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 public_key = excluded.public_key,
                 model_name = excluded.model_name,
@@ -325,11 +329,12 @@ class Database:
                 model_params = excluded.model_params,
                 model_quantization = excluded.model_quantization,
                 tokens_per_second = excluded.tokens_per_second,
-                node_tier = excluded.node_tier
+                node_tier = excluded.node_tier,
+                supports_vision = excluded.supports_vision
             """,
             (id, owner_id, public_key, model_name, max_context, vram_gb,
              lmstudio_port, datetime.utcnow(), gpu_name, model_params,
-             model_quantization, tokens_per_second, node_tier)
+             model_quantization, tokens_per_second, node_tier, supports_vision)
         )
         await self.conn.commit()
         return await self.get_node_by_id(id)
@@ -413,6 +418,14 @@ class Database:
         async with self.conn.execute(
             "SELECT * FROM nodes WHERE node_tier = ? ORDER BY reputation DESC",
             (tier,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_vision_capable_nodes(self) -> list[dict[str, Any]]:
+        """Get all nodes that support vision/image processing."""
+        async with self.conn.execute(
+            "SELECT * FROM nodes WHERE supports_vision = TRUE ORDER BY reputation DESC"
         ) as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
