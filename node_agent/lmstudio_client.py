@@ -337,7 +337,18 @@ class LMStudioClient:
             json=payload,
             timeout=stream_timeout
         ) as response:
-            response.raise_for_status()
+            # Check for errors and log full details from LM Studio
+            if response.status_code >= 400:
+                error_body = await response.aread()
+                error_text = error_body.decode('utf-8', errors='replace')
+                logger.error(
+                    "lmstudio_api_error",
+                    status_code=response.status_code,
+                    error_body=error_text[:2000],
+                    has_images="image_url" in str(payload)
+                )
+                raise LMStudioError(f"LM Studio API error {response.status_code}: {error_text[:500]}")
+
             async for line in response.aiter_lines():
                 if line.startswith("data: "):
                     data = line[6:]
@@ -401,6 +412,142 @@ class LMStudioClient:
         message = choices[0].get("message", {})
         return message.get("content", "")
 
+    async def _vision_completion(
+        self,
+        prompt: str,
+        images: list[dict],
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
+        on_token: Optional[callable] = None
+    ) -> str:
+        """
+        Handle vision/multimodal completion with images.
+
+        Uses non-streaming API first as it's more reliable for vision in LM Studio.
+
+        Args:
+            prompt: User prompt
+            images: List of images (mime_type, content_base64)
+            system_prompt: Optional system prompt
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens
+            timeout: Request timeout
+            on_token: Optional callback for progress
+
+        Returns:
+            Generated text response
+        """
+        messages = []
+
+        if system_prompt:
+            messages.append({
+                "role": "system",
+                "content": system_prompt
+            })
+
+        # Build multimodal content
+        content = [{"type": "text", "text": prompt}]
+        for img in images:
+            # Normalize mime type
+            mime_type = img['mime_type'].lower()
+            # LM Studio may have issues with webp
+            if mime_type == 'image/webp':
+                mime_type = 'image/png'
+
+            content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{img['content_base64']}"
+                }
+            })
+
+        messages.append({
+            "role": "user",
+            "content": content
+        })
+
+        logger.info(
+            "vision_completion_request",
+            image_count=len(images),
+            prompt_length=len(prompt),
+            mime_types=[img['mime_type'] for img in images]
+        )
+
+        # Use non-streaming request for vision (more reliable)
+        model = await self.get_loaded_model() or "local-model"
+        request_timeout = timeout if timeout else MAX_GENERATION_TIMEOUT
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,  # Non-streaming for vision
+            "max_tokens": max_tokens or 4096
+        }
+
+        try:
+            response = await self.client.post(
+                "/chat/completions",
+                json=payload,
+                timeout=request_timeout
+            )
+
+            if response.status_code >= 400:
+                error_text = response.text[:2000]
+                logger.error(
+                    "vision_api_error",
+                    status_code=response.status_code,
+                    error=error_text,
+                    model=model
+                )
+                raise LMStudioError(f"Vision API error {response.status_code}: {error_text}")
+
+            result = response.json()
+
+            # Extract response
+            choices = result.get("choices", [])
+            if not choices:
+                logger.warning("vision_no_choices_in_response")
+                return ""
+
+            response_text = choices[0].get("message", {}).get("content", "")
+
+            # Call on_token callback with full response (simulate streaming)
+            if on_token and response_text:
+                # Send response in chunks to simulate streaming
+                chunk_size = 20
+                for i in range(0, len(response_text), chunk_size):
+                    chunk = response_text[i:i + chunk_size]
+                    try:
+                        on_token(chunk, i // chunk_size + 1)
+                    except Exception:
+                        pass
+
+            logger.info(
+                "vision_completion_success",
+                response_length=len(response_text),
+                model=model
+            )
+
+            return response_text
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "vision_http_error",
+                status_code=e.response.status_code,
+                error=str(e)
+            )
+            raise LMStudioError(f"Vision HTTP error: {e}")
+        except Exception as e:
+            logger.error(
+                "vision_completion_error",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            raise
+
     async def simple_completion_stream(
         self,
         prompt: str,
@@ -432,6 +579,18 @@ class LMStudioClient:
         Returns:
             Generated text response (accumulated from stream)
         """
+        # If images are present, use non-streaming API (more reliable for vision)
+        if images:
+            return await self._vision_completion(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                images=images,
+                on_token=on_token
+            )
+
         messages = []
 
         if system_prompt:
@@ -440,31 +599,10 @@ class LMStudioClient:
                 "content": system_prompt
             })
 
-        # Build user message content - multimodal if images present
-        if images:
-            # Vision model format: content is a list with text and images
-            content = [{"type": "text", "text": prompt}]
-            for img in images:
-                content.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{img['mime_type']};base64,{img['content_base64']}"
-                    }
-                })
-            messages.append({
-                "role": "user",
-                "content": content
-            })
-            logger.info(
-                "multimodal_message_created",
-                image_count=len(images),
-                prompt_length=len(prompt)
-            )
-        else:
-            messages.append({
-                "role": "user",
-                "content": prompt
-            })
+        messages.append({
+            "role": "user",
+            "content": prompt
+        })
 
         # Accumulate response from stream
         response_parts = []
