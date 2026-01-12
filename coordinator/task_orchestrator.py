@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional, Dict
 import structlog
 
+from typing import List
 from shared.models import (
     Task,
     TaskStatus,
@@ -17,6 +18,7 @@ from shared.models import (
     TaskDifficulty,
     Subtask,
     SubtaskStatus,
+    FileAttachment,
     generate_id,
 )
 from shared.protocol import (
@@ -74,6 +76,7 @@ class TaskOrchestrator:
         self,
         user_id: str,
         prompt: str,
+        files: Optional[List[FileAttachment]] = None,
         mode: TaskMode = TaskMode.SUBTASKS,
         difficulty: Optional[TaskDifficulty] = None,
         enable_streaming: bool = False
@@ -84,6 +87,7 @@ class TaskOrchestrator:
         Args:
             user_id: User who submitted the task
             prompt: The inference prompt
+            files: Optional list of file attachments (PDFs, images)
             mode: Task division mode
             difficulty: Optional explicit difficulty (auto-detected if None)
             enable_streaming: If True, enable real-time streaming of response chunks
@@ -93,11 +97,39 @@ class TaskOrchestrator:
         """
         task_id = generate_id()
 
+        # Process multimodal files if provided
+        processed_prompt = prompt
+        has_files = bool(files)
+
+        if files:
+            logger.info(
+                "processing_multimodal_files",
+                task_id=task_id,
+                file_count=len(files),
+                total_size_mb=sum(f.size_bytes for f in files) / 1024 / 1024
+            )
+
+            from .multimodal_processor import multimodal_processor
+            processed_prompt = await multimodal_processor.process_files(
+                files=files,
+                user_prompt=prompt
+            )
+
+            # Tasks with files are always ADVANCED (require more context understanding)
+            difficulty = TaskDifficulty.ADVANCED
+
+            logger.info(
+                "multimodal_processing_complete",
+                task_id=task_id,
+                original_prompt_length=len(prompt),
+                processed_prompt_length=len(processed_prompt)
+            )
+
         # Auto-classify difficulty using LLM if not provided
         # Falls back to local classifier if no BASIC nodes available
         if difficulty is None:
             difficulty = await classify_task_difficulty_async(
-                prompt=prompt,
+                prompt=processed_prompt,
                 node_registry=node_registry,
                 coordinator_crypto=coordinator_crypto
             )
@@ -108,7 +140,8 @@ class TaskOrchestrator:
             user_id=user_id,
             mode=mode.value,
             original_prompt=prompt,
-            difficulty=difficulty.value
+            difficulty=difficulty.value,
+            has_files=has_files
         )
 
         # Create streaming queue if streaming is enabled
@@ -121,11 +154,12 @@ class TaskOrchestrator:
             user_id=user_id,
             mode=mode.value,
             difficulty=difficulty.value,
-            streaming=enable_streaming
+            streaming=enable_streaming,
+            has_files=has_files
         )
 
-        # Start processing in background
-        asyncio.create_task(self._process_task(task_id, prompt, mode, difficulty, enable_streaming))
+        # Start processing in background (use processed_prompt for multimodal tasks)
+        asyncio.create_task(self._process_task(task_id, processed_prompt, mode, difficulty, enable_streaming))
 
         return task
 

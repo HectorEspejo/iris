@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     encrypted_prompt TEXT,
     status TEXT DEFAULT 'pending',
     final_response TEXT,
+    has_files BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
@@ -190,6 +191,8 @@ MIGRATIONS = [
     # Add account_id to nodes table
     "ALTER TABLE nodes ADD COLUMN account_id TEXT REFERENCES accounts(id)",
     "CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id)",
+    # Add has_files column to tasks for multimodal support
+    "ALTER TABLE tasks ADD COLUMN has_files BOOLEAN DEFAULT FALSE",
 ]
 
 
@@ -425,15 +428,16 @@ class Database:
         mode: str,
         original_prompt: str,
         encrypted_prompt: Optional[str] = None,
-        difficulty: str = "simple"
+        difficulty: str = "simple",
+        has_files: bool = False
     ) -> dict[str, Any]:
         """Create a new task."""
         await self.conn.execute(
             """
-            INSERT INTO tasks (id, user_id, mode, difficulty, original_prompt, encrypted_prompt)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (id, user_id, mode, difficulty, original_prompt, encrypted_prompt, has_files)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (id, user_id, mode, difficulty, original_prompt, encrypted_prompt)
+            (id, user_id, mode, difficulty, original_prompt, encrypted_prompt, has_files)
         )
         await self.conn.commit()
         return await self.get_task_by_id(id)

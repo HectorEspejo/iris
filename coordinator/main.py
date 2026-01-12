@@ -282,15 +282,32 @@ async def api_inference(
     Submit an inference request.
 
     The request will be divided into subtasks and distributed to available nodes.
+    Supports optional file attachments (PDFs, images) for multimodal processing.
     """
     # Import here to avoid circular imports
     from .task_orchestrator import task_orchestrator
+
+    # Validate files if provided
+    if request.files:
+        total_size = sum(f.size_bytes for f in request.files)
+        if total_size > 100 * 1024 * 1024:  # 100MB total limit
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Total file size exceeds 100MB limit"
+            )
+        if len(request.files) > 5:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum 5 files allowed"
+            )
 
     try:
         task = await task_orchestrator.create_task(
             user_id=user.id,
             prompt=request.prompt,
-            mode=request.mode
+            files=request.files,
+            mode=request.mode,
+            enable_streaming=True
         )
 
         return InferenceResponse(

@@ -6,8 +6,8 @@ Shared data models for users, nodes, tasks, and economic tracking.
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
-from pydantic import BaseModel, Field, EmailStr
+from typing import Optional, List
+from pydantic import BaseModel, Field, EmailStr, field_validator
 import uuid
 
 
@@ -243,14 +243,93 @@ class Subtask(BaseModel):
 
 
 # =============================================================================
+# File Attachment (Multimodal Support)
+# =============================================================================
+
+# Allowed MIME types for file uploads
+ALLOWED_MIME_TYPES = {
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+    'application/pdf'
+}
+
+# Maximum file size (50MB)
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
+
+
+class FileAttachment(BaseModel):
+    """
+    Archivo adjunto para procesamiento multimodal.
+
+    Soporta imágenes (JPEG, PNG, WebP, GIF) y PDFs.
+    El contenido se envía codificado en base64.
+    """
+    filename: str
+    mime_type: str
+    content_base64: str
+    size_bytes: int
+
+    @field_validator('mime_type')
+    @classmethod
+    def validate_mime_type(cls, v: str) -> str:
+        if v not in ALLOWED_MIME_TYPES:
+            raise ValueError(
+                f'MIME type "{v}" not supported. '
+                f'Allowed: {", ".join(ALLOWED_MIME_TYPES)}'
+            )
+        return v
+
+    @field_validator('size_bytes')
+    @classmethod
+    def validate_size(cls, v: int) -> int:
+        if v > MAX_FILE_SIZE_BYTES:
+            raise ValueError(
+                f'File too large ({v / 1024 / 1024:.1f}MB). '
+                f'Max: {MAX_FILE_SIZE_BYTES / 1024 / 1024:.0f}MB'
+            )
+        if v <= 0:
+            raise ValueError('File size must be positive')
+        return v
+
+    @property
+    def is_image(self) -> bool:
+        """Check if this is an image file."""
+        return self.mime_type.startswith('image/')
+
+    @property
+    def is_pdf(self) -> bool:
+        """Check if this is a PDF file."""
+        return self.mime_type == 'application/pdf'
+
+
+# =============================================================================
 # Inference Request/Response
 # =============================================================================
 
 class InferenceRequest(BaseModel):
     """Request sent from client to coordinator."""
     prompt: str
+    files: Optional[List[FileAttachment]] = None  # Archivos adjuntos (multimodal)
     mode: TaskMode = TaskMode.SUBTASKS
     encrypted: bool = False  # If true, prompt is already encrypted
+
+    @field_validator('files')
+    @classmethod
+    def validate_files(cls, v: Optional[List[FileAttachment]]) -> Optional[List[FileAttachment]]:
+        if v is None:
+            return v
+        if len(v) > 5:
+            raise ValueError('Maximum 5 files allowed')
+        total_size = sum(f.size_bytes for f in v)
+        max_total = 100 * 1024 * 1024  # 100MB total
+        if total_size > max_total:
+            raise ValueError(
+                f'Total file size ({total_size / 1024 / 1024:.1f}MB) '
+                f'exceeds limit ({max_total / 1024 / 1024:.0f}MB)'
+            )
+        return v
 
 
 class InferenceResponse(BaseModel):

@@ -200,6 +200,25 @@
             background: rgba(0, 0, 0, 0.2);
             font-weight: 600;
         }
+
+        /* File upload styles */
+        .file-preview-item {
+            animation: fileFadeIn 0.2s ease-out;
+        }
+
+        @keyframes fileFadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .file-preview-item:hover .file-remove-btn {
+            opacity: 1;
+        }
+
+        .file-remove-btn {
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
     </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col">
@@ -296,7 +315,25 @@
 
             <!-- Input Area -->
             <div class="p-4 border-t border-gray-700/50">
+                <!-- File Preview Area -->
+                <div id="file-preview" class="hidden mb-3 flex flex-wrap gap-2">
+                    <!-- Files will be added here dynamically -->
+                </div>
+
                 <form id="chat-form" class="flex items-end gap-3">
+                    <!-- File Upload Button -->
+                    <input type="file" id="file-input" accept=".pdf,.jpg,.jpeg,.png,.webp,.gif" multiple class="hidden">
+                    <button
+                        type="button"
+                        id="attach-btn"
+                        class="p-3 bg-gray-800/50 hover:bg-gray-700/50 border border-gray-700/50 rounded-xl text-gray-400 hover:text-gray-300 transition-colors"
+                        title="Attach file (PDF, images)"
+                    >
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+                        </svg>
+                    </button>
+
                     <div class="flex-1">
                         <textarea
                             id="message-input"
@@ -320,6 +357,9 @@
                 <div id="limit-warning" class="hidden mt-2 text-xs text-amber-400">
                     You have reached your message limit. Enter an Account Key for more messages.
                 </div>
+                <div class="mt-2 text-xs text-gray-500">
+                    <span id="file-hint">Supports PDF and images (max 3 files, 20MB total)</span>
+                </div>
             </div>
         </div>
 
@@ -341,7 +381,8 @@
             messagesLimit: 1,
             accountKey: null,
             accountVerified: false,
-            isProcessing: false
+            isProcessing: false,
+            attachedFiles: []  // Array of { filename, mime_type, content_base64, size_bytes }
         };
 
         // DOM Elements
@@ -357,6 +398,9 @@
         const welcomeLimit = document.getElementById('welcome-limit');
         const statusIndicator = document.getElementById('status-indicator');
         const accountStatus = document.getElementById('account-status');
+        const fileInput = document.getElementById('file-input');
+        const attachBtn = document.getElementById('attach-btn');
+        const filePreview = document.getElementById('file-preview');
 
         // Initialize from localStorage
         function init() {
@@ -489,7 +533,7 @@
         }
 
         // Add message to chat
-        function addMessage(content, isUser = false) {
+        function addMessage(content, isUser = false, attachedFileNames = []) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `flex items-start space-x-3 message-fade-in ${isUser ? 'flex-row-reverse space-x-reverse' : ''}`;
 
@@ -514,10 +558,33 @@
                 ? `<p class="text-sm text-gray-300 whitespace-pre-wrap">${escapeHtml(content)}</p>`
                 : `<div class="text-sm text-gray-300 markdown-content">${renderMarkdown(content)}</div>`;
 
+            // File attachments indicator for user messages
+            let filesIndicator = '';
+            if (isUser && attachedFileNames.length > 0) {
+                const filesList = attachedFileNames.map(name => {
+                    const isPdf = name.toLowerCase().endsWith('.pdf');
+                    const icon = isPdf
+                        ? `<svg class="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                           </svg>`
+                        : `<svg class="w-3 h-3 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                           </svg>`;
+                    return `<span class="inline-flex items-center gap-1">${icon}<span class="truncate max-w-[100px]" title="${escapeHtml(name)}">${escapeHtml(name)}</span></span>`;
+                }).join('');
+
+                filesIndicator = `
+                    <div class="mt-2 pt-2 border-t border-gray-600/30 flex flex-wrap gap-2 text-xs text-gray-400">
+                        ${filesList}
+                    </div>
+                `;
+            }
+
             messageDiv.innerHTML = `
                 ${avatar}
                 <div class="flex-1 ${bubbleClass} p-4 max-w-[80%]">
                     ${messageContent}
+                    ${filesIndicator}
                 </div>
             `;
 
@@ -572,6 +639,119 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // File handling functions
+        const MAX_FILES = 3;
+        const MAX_TOTAL_SIZE = 20 * 1024 * 1024; // 20MB
+        const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
+
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => {
+                    const base64 = reader.result.split(',')[1];
+                    resolve(base64);
+                };
+                reader.onerror = error => reject(error);
+            });
+        }
+
+        async function handleFileSelection(files) {
+            for (const file of files) {
+                // Check file count
+                if (state.attachedFiles.length >= MAX_FILES) {
+                    addSystemMessage(`Maximum ${MAX_FILES} files allowed.`);
+                    break;
+                }
+
+                // Check file type
+                if (!ALLOWED_TYPES.includes(file.type)) {
+                    addSystemMessage(`File type not supported: ${file.name}`);
+                    continue;
+                }
+
+                // Check total size
+                const currentSize = state.attachedFiles.reduce((sum, f) => sum + f.size_bytes, 0);
+                if (currentSize + file.size > MAX_TOTAL_SIZE) {
+                    addSystemMessage(`Total file size exceeds 20MB limit.`);
+                    continue;
+                }
+
+                // Check individual file size
+                if (file.size > MAX_TOTAL_SIZE) {
+                    addSystemMessage(`File too large: ${file.name} (max 20MB)`);
+                    continue;
+                }
+
+                try {
+                    const base64 = await fileToBase64(file);
+                    state.attachedFiles.push({
+                        filename: file.name,
+                        mime_type: file.type,
+                        content_base64: base64,
+                        size_bytes: file.size
+                    });
+                } catch (e) {
+                    console.error('Failed to read file:', e);
+                    addSystemMessage(`Failed to read file: ${file.name}`);
+                }
+            }
+
+            updateFilePreview();
+        }
+
+        function updateFilePreview() {
+            if (state.attachedFiles.length === 0) {
+                filePreview.classList.add('hidden');
+                filePreview.innerHTML = '';
+                return;
+            }
+
+            filePreview.classList.remove('hidden');
+            filePreview.innerHTML = state.attachedFiles.map((file, index) => {
+                const isImage = file.mime_type.startsWith('image/');
+                const isPdf = file.mime_type === 'application/pdf';
+                const sizeMb = (file.size_bytes / 1024 / 1024).toFixed(2);
+
+                const icon = isPdf
+                    ? `<svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                       </svg>`
+                    : `<svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                       </svg>`;
+
+                return `
+                    <div class="file-preview-item flex items-center gap-2 px-3 py-2 bg-gray-800/50 border border-gray-700/50 rounded-lg">
+                        ${icon}
+                        <span class="text-xs text-gray-300 truncate max-w-[120px]" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</span>
+                        <span class="text-xs text-gray-500">${sizeMb}MB</span>
+                        <button
+                            type="button"
+                            onclick="removeFile(${index})"
+                            class="file-remove-btn ml-1 p-1 hover:bg-gray-700 rounded text-gray-400 hover:text-red-400 transition-colors"
+                            title="Remove file"
+                        >
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function removeFile(index) {
+            state.attachedFiles.splice(index, 1);
+            updateFilePreview();
+        }
+
+        function clearFiles() {
+            state.attachedFiles = [];
+            updateFilePreview();
+            fileInput.value = '';
         }
 
         // Add empty bot message that can be updated with streaming content
@@ -630,19 +810,34 @@
             state.isProcessing = true;
             updateUI();
 
-            addMessage(message, true);
+            // Show user message with file indicators if any
+            const fileNames = state.attachedFiles.map(f => f.filename);
+            addMessage(message, true, fileNames);
+
             const streamingDiv = addStreamingMessage();
             let responseText = '';
             let hasReceivedContent = false;
+
+            // Build request body
+            const requestBody = {
+                prompt: message,
+                account_key: state.accountKey
+            };
+
+            // Add files if any
+            if (state.attachedFiles.length > 0) {
+                requestBody.files = state.attachedFiles;
+            }
+
+            // Clear files after capturing them for the request
+            const hadFiles = state.attachedFiles.length > 0;
+            clearFiles();
 
             try {
                 const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        prompt: message,
-                        account_key: state.accountKey
-                    })
+                    body: JSON.stringify(requestBody)
                 });
 
                 if (!response.ok) {
@@ -737,6 +932,43 @@
             if (e.key === 'Enter') {
                 e.preventDefault();
                 verifyAccountKey();
+            }
+        });
+
+        // File upload event listeners
+        attachBtn.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files.length > 0) {
+                handleFileSelection(Array.from(e.target.files));
+                e.target.value = ''; // Reset so same file can be selected again
+            }
+        });
+
+        // Drag and drop support for the input area
+        const chatContainer = document.getElementById('chat-container');
+        chatContainer.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            chatContainer.classList.add('border-brand-500');
+        });
+
+        chatContainer.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            chatContainer.classList.remove('border-brand-500');
+        });
+
+        chatContainer.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            chatContainer.classList.remove('border-brand-500');
+
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                handleFileSelection(Array.from(files));
             }
         });
 
