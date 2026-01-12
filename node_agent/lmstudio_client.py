@@ -147,6 +147,73 @@ class LMStudioClient:
 
         return {"id": "unknown", "name": "unknown"}
 
+    async def supports_vision(self) -> bool:
+        """
+        Check if the loaded model supports vision/image input.
+
+        LM Studio API returns vision capability in several ways:
+        - type: "vlm" (Vision Language Model) vs "llm"
+        - vision: true/false boolean field
+        - arch field containing "vl" or "vision"
+
+        Returns:
+            True if the model supports vision/image processing
+        """
+        try:
+            models = await self.get_models()
+            if not models:
+                logger.warning("no_models_loaded_for_vision_check")
+                return False
+
+            model_data = models[0]
+            model_id = model_data.get("id", "unknown")
+
+            # Log all model data for debugging
+            logger.info(
+                "checking_vision_support",
+                model_id=model_id,
+                model_data=model_data
+            )
+
+            # Method 1: Check type field (vlm = Vision Language Model)
+            model_type = model_data.get("type", "").lower()
+            if model_type == "vlm":
+                logger.info("vision_detected_via_type", model=model_id, type=model_type)
+                return True
+
+            # Method 2: Check explicit vision field
+            vision_field = model_data.get("vision")
+            if vision_field is True:
+                logger.info("vision_detected_via_field", model=model_id)
+                return True
+
+            # Method 3: Check architecture field for vision indicators
+            arch = model_data.get("arch", model_data.get("architecture", "")).lower()
+            vision_archs = ["vl", "vision", "vlm", "llava", "qwen_vl", "qwen2_vl"]
+            for va in vision_archs:
+                if va in arch:
+                    logger.info("vision_detected_via_arch", model=model_id, arch=arch)
+                    return True
+
+            # Method 4: Check capabilities array if present
+            capabilities = model_data.get("capabilities", [])
+            if "vision" in capabilities or "image" in capabilities:
+                logger.info("vision_detected_via_capabilities", model=model_id, capabilities=capabilities)
+                return True
+
+            logger.info(
+                "vision_not_detected_from_api",
+                model=model_id,
+                type=model_type,
+                arch=arch,
+                available_fields=list(model_data.keys())
+            )
+            return False
+
+        except Exception as e:
+            logger.warning("vision_check_failed", error=str(e))
+            return False
+
     async def chat_completion(
         self,
         messages: list[dict],

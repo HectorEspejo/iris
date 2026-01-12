@@ -299,12 +299,28 @@ class NodeAgent:
             logger.warning("registering_without_account_key")
 
         # Detect if model supports vision/image processing
-        supports_vision = detect_vision_support(model_name)
+        # Primary: Check LM Studio API for vision capability
+        supports_vision = await self._lm_client.supports_vision()
+
+        # Fallback: Use pattern matching on model name if API didn't detect
+        if not supports_vision:
+            supports_vision = detect_vision_support(model_name)
+            if supports_vision:
+                logger.info(
+                    "vision_detected_via_pattern_fallback",
+                    model=model_name
+                )
+
         if supports_vision:
             logger.info(
                 "vision_capable_model_detected",
                 model=model_name,
                 message="This node can process images"
+            )
+        else:
+            logger.info(
+                "model_does_not_support_vision",
+                model=model_name
             )
 
         message = ProtocolMessage.create(
