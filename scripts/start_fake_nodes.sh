@@ -14,7 +14,9 @@
 # Uso:
 #   ./scripts/start_fake_nodes.sh
 #
-# Variables de entorno requeridas:
+# El script carga automaticamente el archivo .env del directorio raiz.
+#
+# Variables de entorno requeridas (en .env o exportadas):
 #   OPENROUTER_API_KEY - API key de OpenRouter
 #   IRIS_ACCOUNT_KEY   - Account key para los fake nodes
 #
@@ -32,6 +34,22 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Obtener directorio raiz del repo (donde esta el .env)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Cargar .env si existe
+ENV_FILE="$REPO_ROOT/.env"
+if [ -f "$ENV_FILE" ]; then
+    echo -e "${BLUE}Loading .env from:${NC} $ENV_FILE"
+    # Exportar variables del .env (ignorando comentarios y lineas vacias)
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo -e "${YELLOW}Warning: .env file not found at $ENV_FILE${NC}"
+fi
 
 # Verificar variables requeridas
 if [ -z "$OPENROUTER_API_KEY" ]; then
