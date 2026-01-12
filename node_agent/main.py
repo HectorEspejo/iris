@@ -31,7 +31,7 @@ from .crypto import node_crypto
 from .lmstudio_client import LMStudioClient
 from .heartbeat import HeartbeatManager
 from .gpu_info import detect_gpu, GPUDetector
-from .model_info import parse_model_info
+from .model_info import parse_model_info, detect_vision_support
 
 # Configure logging
 import logging
@@ -298,6 +298,15 @@ class NodeAgent:
         else:
             logger.warning("registering_without_account_key")
 
+        # Detect if model supports vision/image processing
+        supports_vision = detect_vision_support(model_name)
+        if supports_vision:
+            logger.info(
+                "vision_capable_model_detected",
+                model=model_name,
+                message="This node can process images"
+            )
+
         message = ProtocolMessage.create(
             MessageType.NODE_REGISTER,
             NodeRegisterPayload(
@@ -315,7 +324,8 @@ class NodeAgent:
                 gpu_vram_free=self._gpu_info.vram_free_gb if self._gpu_info else 0.0,
                 model_params=self._model_info.params_billions if self._model_info else 7.0,
                 model_quantization=self._model_info.quantization if self._model_info else "Q4",
-                tokens_per_second=self._tokens_per_second
+                tokens_per_second=self._tokens_per_second,
+                supports_vision=supports_vision  # Vision/multimodal capability
             )
         )
 
@@ -409,11 +419,15 @@ class NodeAgent:
             # Execute via LM Studio using streaming
             # Streaming keeps connection alive while tokens are generated,
             # avoiding timeout issues with slow models
+            # Check if this task has images (multimodal)
+            has_images = bool(payload.images)
             logger.info(
                 "executing_inference_stream",
                 subtask_id=payload.subtask_id,
                 timeout_seconds=payload.timeout_seconds,
-                streaming_enabled=payload.enable_streaming
+                streaming_enabled=payload.enable_streaming,
+                has_images=has_images,
+                image_count=len(payload.images) if payload.images else 0
             )
 
             # Track token generation for metrics and streaming
@@ -486,10 +500,27 @@ class NodeAgent:
                         except asyncio.QueueFull:
                             logger.warning("stream_queue_full", task_id=payload.task_id)
 
+            # Convert images to dict format for lmstudio_client
+            images_for_lm = None
+            if payload.images:
+                images_for_lm = [
+                    {
+                        "mime_type": img.mime_type,
+                        "content_base64": img.content_base64
+                    }
+                    for img in payload.images
+                ]
+                logger.info(
+                    "sending_images_to_model",
+                    task_id=payload.task_id,
+                    image_count=len(images_for_lm)
+                )
+
             response = await self._lm_client.simple_completion_stream(
                 prompt,
                 timeout=float(payload.timeout_seconds),
-                on_token=on_token
+                on_token=on_token,
+                images=images_for_lm
             )
 
             # Send any remaining buffered chunks

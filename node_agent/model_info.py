@@ -220,6 +220,90 @@ def _extract_family(name: str) -> str:
     return 'unknown'
 
 
+def detect_vision_support(model_name: str) -> bool:
+    """
+    Detect if a model supports vision/image processing based on its name.
+
+    Many vision-capable models have identifiable patterns in their names.
+    This function checks against known vision model families and keywords.
+
+    Args:
+        model_name: The model name/identifier
+
+    Returns:
+        True if the model likely supports vision/image processing
+    """
+    name_lower = model_name.lower()
+
+    # Known vision-capable model patterns
+    vision_patterns = [
+        # LLaVA family - most common vision LLMs
+        'llava',
+        'llava-1.5',
+        'llava-1.6',
+        'llava-next',
+        'llava-onevision',
+
+        # Qwen vision models
+        'qwen-vl',
+        'qwen2-vl',
+        'qwen2.5-vl',
+        'qwenvl',
+
+        # Google Gemma 3 and PaliGemma (vision capable)
+        'gemma-3',
+        'gemma3',
+        'paligemma',
+
+        # MiniCPM-V (vision variant)
+        'minicpm-v',
+        'minicpm-2.6',
+        'minicpm-o',
+
+        # Other vision models
+        'idefics',
+        'idefics2',
+        'idefics3',
+        'pixtral',
+        'molmo',
+        'moondream',
+        'cogvlm',
+        'cogagent',
+        'internvl',
+        'internlm-xcomposer',
+        'yi-vl',
+        'deepseek-vl',
+        'phi-3-vision',
+        'phi-3.5-vision',
+        'phi3-vision',
+        'fuyu',
+        'bakllava',
+        'obsidian',
+        'llama-3.2-vision',
+        'llama-3.2-11b-vision',
+        'llama-3.2-90b-vision',
+        'nanollava',
+
+        # Generic vision keywords
+        '-vision',
+        '_vision',
+        '-vl-',
+        '-vl_',
+        'multimodal',
+    ]
+
+    for pattern in vision_patterns:
+        if pattern in name_lower:
+            logger.info(
+                "vision_support_detected",
+                model=model_name,
+                pattern=pattern
+            )
+            return True
+
+    return False
+
+
 def estimate_model_quality_score(info: ModelInfo) -> float:
     """
     Estimate model quality based on parameters and quantization.

@@ -341,7 +341,8 @@ class LMStudioClient:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
-        on_token: Optional[callable] = None
+        on_token: Optional[callable] = None,
+        images: Optional[list[dict]] = None
     ) -> str:
         """
         Simple completion using streaming - better for slow models.
@@ -357,6 +358,9 @@ class LMStudioClient:
             max_tokens: Maximum tokens
             timeout: Request timeout in seconds
             on_token: Optional callback called for each token (for progress tracking)
+            images: Optional list of images for vision models. Each dict should have:
+                    - mime_type: str (e.g., "image/jpeg")
+                    - content_base64: str (base64 encoded image data)
 
         Returns:
             Generated text response (accumulated from stream)
@@ -369,10 +373,31 @@ class LMStudioClient:
                 "content": system_prompt
             })
 
-        messages.append({
-            "role": "user",
-            "content": prompt
-        })
+        # Build user message content - multimodal if images present
+        if images:
+            # Vision model format: content is a list with text and images
+            content = [{"type": "text", "text": prompt}]
+            for img in images:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{img['mime_type']};base64,{img['content_base64']}"
+                    }
+                })
+            messages.append({
+                "role": "user",
+                "content": content
+            })
+            logger.info(
+                "multimodal_message_created",
+                image_count=len(images),
+                prompt_length=len(prompt)
+            )
+        else:
+            messages.append({
+                "role": "user",
+                "content": prompt
+            })
 
         # Accumulate response from stream
         response_parts = []
