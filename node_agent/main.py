@@ -435,15 +435,15 @@ class NodeAgent:
             # Execute via LM Studio using streaming
             # Streaming keeps connection alive while tokens are generated,
             # avoiding timeout issues with slow models
-            # Check if this task has images (multimodal)
-            has_images = bool(payload.images)
+            # Check if this task has files (multimodal - images or PDFs)
+            has_files = bool(payload.files)
             logger.info(
                 "executing_inference_stream",
                 subtask_id=payload.subtask_id,
                 timeout_seconds=payload.timeout_seconds,
                 streaming_enabled=payload.enable_streaming,
-                has_images=has_images,
-                image_count=len(payload.images) if payload.images else 0
+                has_files=has_files,
+                file_count=len(payload.files) if payload.files else 0
             )
 
             # Track token generation for metrics and streaming
@@ -516,27 +516,29 @@ class NodeAgent:
                         except asyncio.QueueFull:
                             logger.warning("stream_queue_full", task_id=payload.task_id)
 
-            # Convert images to dict format for lmstudio_client
-            images_for_lm = None
-            if payload.images:
-                images_for_lm = [
+            # Convert files to dict format for lmstudio_client
+            files_for_lm = None
+            if payload.files:
+                files_for_lm = [
                     {
-                        "mime_type": img.mime_type,
-                        "content_base64": img.content_base64
+                        "filename": f.filename,
+                        "mime_type": f.mime_type,
+                        "content_base64": f.content_base64
                     }
-                    for img in payload.images
+                    for f in payload.files
                 ]
                 logger.info(
-                    "sending_images_to_model",
+                    "sending_files_to_model",
                     task_id=payload.task_id,
-                    image_count=len(images_for_lm)
+                    file_count=len(files_for_lm),
+                    file_types=[f.mime_type for f in payload.files]
                 )
 
             response = await self._lm_client.simple_completion_stream(
                 prompt,
                 timeout=float(payload.timeout_seconds),
                 on_token=on_token,
-                images=images_for_lm
+                images=files_for_lm  # Parameter still named 'images' in lmstudio_client
             )
 
             # Send any remaining buffered chunks

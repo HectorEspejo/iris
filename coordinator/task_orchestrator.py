@@ -28,7 +28,7 @@ from shared.protocol import (
     TaskResultPayload,
     TaskErrorPayload,
     TaskStreamPayload,
-    ImageData,
+    FileData,
     parse_payload,
 )
 from .database import db
@@ -98,17 +98,17 @@ class TaskOrchestrator:
         """
         task_id = generate_id()
 
-        # Separate files by type
+        # Process files - both images and PDFs go to vision-capable nodes
+        # Gemini is used as fallback only if no vision nodes available
         processed_prompt = prompt
         has_files = bool(files)
-        images = []
-        pdfs = []
+        vision_files = []  # All files to send to vision nodes (images + PDFs)
 
         if files:
             images = [f for f in files if f.is_image]
             pdfs = [f for f in files if f.is_pdf]
 
-            # Log current vision nodes status when processing files
+            # Log current vision nodes status
             all_connected_nodes = node_registry.get_all_nodes()
             vision_nodes = node_registry.get_vision_capable_nodes()
 
@@ -124,28 +124,50 @@ class TaskOrchestrator:
                 vision_node_models=[n.model_name for n in vision_nodes]
             )
 
-            # Process PDFs with Gemini (images go directly to vision-capable nodes)
-            if pdfs:
-                from .multimodal_processor import multimodal_processor
-                processed_prompt = await multimodal_processor.process_pdfs(
-                    pdfs=pdfs,
-                    user_prompt=prompt
-                )
+            # Strategy: Send all files to vision nodes if available
+            # Fallback to Gemini for PDFs only if no vision nodes
+            if vision_nodes:
+                # Vision nodes available - send ALL files (images + PDFs) directly
+                vision_files = files  # Both images and PDFs
                 logger.info(
-                    "pdf_processing_complete",
+                    "files_will_be_sent_to_vision_nodes",
                     task_id=task_id,
-                    original_prompt_length=len(prompt),
-                    processed_prompt_length=len(processed_prompt)
+                    file_count=len(vision_files),
+                    file_names=[f.filename for f in vision_files]
+                )
+            else:
+                # No vision nodes - use Gemini as fallback for PDFs only
+                logger.warning(
+                    "no_vision_nodes_using_gemini_fallback",
+                    task_id=task_id,
+                    pdf_count=len(pdfs),
+                    image_count=len(images)
                 )
 
-            # Log image handling - images will be sent directly to vision-capable nodes
-            if images:
-                logger.info(
-                    "images_detected_for_vision_processing",
-                    task_id=task_id,
-                    image_count=len(images),
-                    image_names=[f.filename for f in images]
-                )
+                if pdfs:
+                    from .multimodal_processor import multimodal_processor
+                    processed_prompt = await multimodal_processor.process_pdfs(
+                        pdfs=pdfs,
+                        user_prompt=prompt
+                    )
+                    logger.info(
+                        "pdf_processed_via_gemini_fallback",
+                        task_id=task_id,
+                        original_prompt_length=len(prompt),
+                        processed_prompt_length=len(processed_prompt)
+                    )
+
+                if images:
+                    # Cannot process images without vision nodes
+                    image_names = ", ".join(f.filename for f in images)
+                    processed_prompt = f"""NOTA: El usuario adjuntó imágenes ({image_names}) pero no hay nodos con capacidad de visión disponibles. No es posible procesar las imágenes en este momento.
+
+{processed_prompt}"""
+                    logger.warning(
+                        "images_cannot_be_processed_no_vision_nodes",
+                        task_id=task_id,
+                        image_count=len(images)
+                    )
 
             # Tasks with files are always ADVANCED
             difficulty = TaskDifficulty.ADVANCED
@@ -185,7 +207,7 @@ class TaskOrchestrator:
 
         # Start processing in background (use processed_prompt for multimodal tasks)
         asyncio.create_task(self._process_task(
-            task_id, processed_prompt, mode, difficulty, enable_streaming, images
+            task_id, processed_prompt, mode, difficulty, enable_streaming, vision_files
         ))
 
         return task
@@ -197,9 +219,9 @@ class TaskOrchestrator:
         mode: TaskMode,
         difficulty: TaskDifficulty,
         enable_streaming: bool = False,
-        images: Optional[List[FileAttachment]] = None
+        files: Optional[List[FileAttachment]] = None
     ) -> None:
-        """Process a task based on its mode."""
+        """Process a task based on its mode. Files include both images and PDFs."""
         try:
             # Update status to processing
             await db.update_task_status(task_id, TaskStatus.PROCESSING.value)
@@ -236,25 +258,25 @@ class TaskOrchestrator:
                 count=len(subtasks),
                 difficulty=adjusted_difficulty.value,
                 streaming=enable_streaming,
-                has_images=bool(images)
+                has_files=bool(files)
             )
 
             # Assign subtasks to nodes using intelligent matching with retries
-            # If images are present, require vision-capable nodes
+            # If files are present, require vision-capable nodes
             assignments = await self._assign_subtasks(
                 subtasks,
                 adjusted_difficulty,
                 enable_streaming,
-                images=images
+                files=files
             )
 
             # Check if assignment failed for vision tasks
-            if not assignments and images:
-                error_msg = "No hay nodos con capacidad de visión disponibles para procesar las imágenes. Por favor, inténtalo más tarde cuando haya un nodo con modelo de visión (LLaVA, Gemma-3, etc.) conectado."
+            if not assignments and files:
+                error_msg = "No hay nodos con capacidad de visión disponibles para procesar los archivos. Por favor, inténtalo más tarde cuando haya un nodo con modelo de visión (LLaVA, Gemma-3, etc.) conectado."
                 logger.error(
                     "vision_task_failed_no_nodes",
                     task_id=task_id,
-                    image_count=len(images)
+                    file_count=len(files)
                 )
                 await db.update_task_status(task_id, TaskStatus.FAILED.value)
                 await streaming_manager.complete_stream(task_id, error=error_msg)
@@ -442,7 +464,7 @@ class TaskOrchestrator:
         difficulty: TaskDifficulty,
         enable_streaming: bool = False,
         excluded_nodes: Optional[set[str]] = None,
-        images: Optional[List[FileAttachment]] = None
+        files: Optional[List[FileAttachment]] = None
     ) -> tuple[bool, Optional[str]]:
         """
         Assign a single subtask with retry logic and exponential backoff.
@@ -452,13 +474,13 @@ class TaskOrchestrator:
             difficulty: Task difficulty level
             enable_streaming: If True, nodes will stream chunks back
             excluded_nodes: Node IDs to exclude from selection
-            images: Optional images to send to vision-capable nodes
+            files: Optional files (images/PDFs) to send to vision-capable nodes
 
         Returns:
             Tuple of (success, assigned_node_id)
         """
         excluded = excluded_nodes.copy() if excluded_nodes else set()
-        require_vision = bool(images)
+        require_vision = bool(files)
 
         # Log vision requirement
         if require_vision:
@@ -466,13 +488,13 @@ class TaskOrchestrator:
             logger.info(
                 "vision_required_for_task",
                 subtask_id=subtask["id"],
-                image_count=len(images),
+                file_count=len(files),
                 total_vision_nodes=len(all_vision_nodes),
                 vision_node_ids=[n.node_id for n in all_vision_nodes]
             )
 
         for attempt in range(MAX_RETRIES):
-            # PRIORITY: If images are present, ONLY select vision-capable nodes
+            # PRIORITY: If files are present, ONLY select vision-capable nodes
             # This takes precedence over difficulty-based selection
             if require_vision:
                 # Get vision-capable nodes that are not excluded
@@ -502,11 +524,11 @@ class TaskOrchestrator:
                 if require_vision:
                     # Special handling for vision tasks - be explicit about the issue
                     logger.error(
-                        "no_vision_nodes_available_for_images",
+                        "no_vision_nodes_available_for_files",
                         subtask_id=subtask["id"],
-                        image_count=len(images),
+                        file_count=len(files),
                         attempt=attempt + 1,
-                        message="Task has images but no vision-capable nodes are connected"
+                        message="Task has files but no vision-capable nodes are connected"
                     )
                     # Don't retry for vision - if no vision nodes, fail immediately
                     # This prevents falling back to non-vision nodes
@@ -549,16 +571,16 @@ class TaskOrchestrator:
             # Get timeout based on difficulty
             timeout_seconds = get_timeout_for_difficulty(difficulty)
 
-            # Convert images to ImageData for protocol
-            image_data = None
-            if images:
-                image_data = [
-                    ImageData(
-                        filename=img.filename,
-                        mime_type=img.mime_type,
-                        content_base64=img.content_base64
+            # Convert files to FileData for protocol
+            file_data = None
+            if files:
+                file_data = [
+                    FileData(
+                        filename=f.filename,
+                        mime_type=f.mime_type,
+                        content_base64=f.content_base64
                     )
-                    for img in images
+                    for f in files
                 ]
 
             # Create and send task assignment
@@ -570,7 +592,7 @@ class TaskOrchestrator:
                     encrypted_prompt=encrypted_prompt,
                     timeout_seconds=timeout_seconds,
                     enable_streaming=enable_streaming,
-                    images=image_data
+                    files=file_data
                 )
             )
 
@@ -586,7 +608,7 @@ class TaskOrchestrator:
                     difficulty=difficulty.value,
                     timeout_seconds=timeout_seconds,
                     streaming=enable_streaming,
-                    has_images=bool(images),
+                    has_files=bool(files),
                     attempt=attempt + 1
                 )
                 return True, node.node_id
@@ -613,19 +635,19 @@ class TaskOrchestrator:
         subtasks: list[dict],
         difficulty: TaskDifficulty,
         enable_streaming: bool = False,
-        images: Optional[List[FileAttachment]] = None
+        files: Optional[List[FileAttachment]] = None
     ) -> dict[str, str]:
         """
         Assign subtasks to available nodes using intelligent matching with retries.
 
         Uses select_nodes_v3 (SED + P2C) for optimal node selection.
-        If images are present, requires vision-capable nodes.
+        If files are present, requires vision-capable nodes.
 
         Args:
             subtasks: List of subtask records
             difficulty: Task difficulty level
             enable_streaming: If True, nodes will stream chunks back
-            images: Optional images to send to vision-capable nodes
+            files: Optional files (images/PDFs) to send to vision-capable nodes
 
         Returns:
             Dict mapping subtask_id -> assigned_node_id for successful assignments
@@ -637,7 +659,7 @@ class TaskOrchestrator:
                 subtask=subtask,
                 difficulty=difficulty,
                 enable_streaming=enable_streaming,
-                images=images
+                files=files
             )
 
             if success and node_id:

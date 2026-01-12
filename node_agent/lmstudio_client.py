@@ -415,7 +415,7 @@ class LMStudioClient:
     async def _vision_completion(
         self,
         prompt: str,
-        images: list[dict],
+        files: list[dict],
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
@@ -423,13 +423,13 @@ class LMStudioClient:
         on_token: Optional[callable] = None
     ) -> str:
         """
-        Handle vision/multimodal completion with images.
+        Handle vision/multimodal completion with files (images and PDFs).
 
         Uses non-streaming API first as it's more reliable for vision in LM Studio.
 
         Args:
             prompt: User prompt
-            images: List of images (mime_type, content_base64)
+            files: List of files (mime_type, content_base64) - images and PDFs
             system_prompt: Optional system prompt
             temperature: Sampling temperature
             max_tokens: Maximum tokens
@@ -447,21 +447,39 @@ class LMStudioClient:
                 "content": system_prompt
             })
 
-        # Build multimodal content
+        # Build multimodal content - handle both images and PDFs
         content = [{"type": "text", "text": prompt}]
-        for img in images:
-            # Normalize mime type
-            mime_type = img['mime_type'].lower()
-            # LM Studio may have issues with webp
-            if mime_type == 'image/webp':
-                mime_type = 'image/png'
 
-            content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{mime_type};base64,{img['content_base64']}"
-                }
-            })
+        images_count = 0
+        pdfs_count = 0
+
+        for file in files:
+            mime_type = file['mime_type'].lower()
+
+            if mime_type.startswith('image/'):
+                # Handle images
+                # LM Studio may have issues with webp
+                if mime_type == 'image/webp':
+                    mime_type = 'image/png'
+
+                content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{file['content_base64']}"
+                    }
+                })
+                images_count += 1
+
+            elif mime_type == 'application/pdf':
+                # Handle PDFs - use file type for LM Studio
+                content.append({
+                    "type": "file",
+                    "file": {
+                        "filename": file.get('filename', 'document.pdf'),
+                        "file_data": f"data:application/pdf;base64,{file['content_base64']}"
+                    }
+                })
+                pdfs_count += 1
 
         messages.append({
             "role": "user",
@@ -470,9 +488,11 @@ class LMStudioClient:
 
         logger.info(
             "vision_completion_request",
-            image_count=len(images),
+            file_count=len(files),
+            images_count=images_count,
+            pdfs_count=pdfs_count,
             prompt_length=len(prompt),
-            mime_types=[img['mime_type'] for img in images]
+            mime_types=[f['mime_type'] for f in files]
         )
 
         # Use non-streaming request for vision (more reliable)
@@ -579,7 +599,7 @@ class LMStudioClient:
         Returns:
             Generated text response (accumulated from stream)
         """
-        # If images are present, use non-streaming API (more reliable for vision)
+        # If files are present, use non-streaming API (more reliable for vision)
         if images:
             return await self._vision_completion(
                 prompt=prompt,
@@ -587,7 +607,7 @@ class LMStudioClient:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout=timeout,
-                images=images,
+                files=images,  # images parameter contains files (images + PDFs)
                 on_token=on_token
             )
 

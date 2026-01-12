@@ -86,11 +86,23 @@ class HeartbeatAckPayload(BaseModel):
     server_time: datetime = Field(default_factory=datetime.utcnow)
 
 
-class ImageData(BaseModel):
-    """Image data for vision tasks."""
+class FileData(BaseModel):
+    """File data for vision tasks (images and PDFs)."""
     filename: str
-    mime_type: str  # image/jpeg, image/png, etc.
+    mime_type: str  # image/jpeg, image/png, application/pdf, etc.
     content_base64: str
+
+    @property
+    def is_image(self) -> bool:
+        return self.mime_type.startswith('image/')
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.mime_type == 'application/pdf'
+
+
+# Alias for backwards compatibility
+ImageData = FileData
 
 
 class TaskAssignPayload(BaseModel):
@@ -100,8 +112,8 @@ class TaskAssignPayload(BaseModel):
     encrypted_prompt: str  # Encrypted with node's public key
     timeout_seconds: int = 60
     enable_streaming: bool = False  # If True, node sends TASK_STREAM chunks
-    # Multimodal: images for vision-capable models
-    images: Optional[list[ImageData]] = None  # Images to process (unencrypted)
+    # Multimodal: files for vision-capable models (images and PDFs)
+    files: Optional[list[FileData]] = None  # Files to process (unencrypted)
 
 
 class TaskResultPayload(BaseModel):
