@@ -98,11 +98,12 @@ class TaskOrchestrator:
         """
         task_id = generate_id()
 
-        # Process files - both images and PDFs go to vision-capable nodes
-        # Gemini is used as fallback only if no vision nodes available
+        # Process files:
+        # - PDFs: Always processed by Gemini (LM Studio API doesn't support PDFs)
+        # - Images: Sent directly to vision-capable nodes
         processed_prompt = prompt
         has_files = bool(files)
-        vision_files = []  # All files to send to vision nodes (images + PDFs)
+        vision_files = []  # Only images go to vision nodes
 
         if files:
             images = [f for f in files if f.is_image]
@@ -124,41 +125,33 @@ class TaskOrchestrator:
                 vision_node_models=[n.model_name for n in vision_nodes]
             )
 
-            # Strategy: Send all files to vision nodes if available
-            # Fallback to Gemini for PDFs only if no vision nodes
-            if vision_nodes:
-                # Vision nodes available - send ALL files (images + PDFs) directly
-                vision_files = files  # Both images and PDFs
-                logger.info(
-                    "files_will_be_sent_to_vision_nodes",
-                    task_id=task_id,
-                    file_count=len(vision_files),
-                    file_names=[f.filename for f in vision_files]
+            # PDFs: Always process with Gemini (LM Studio doesn't support PDF input)
+            if pdfs:
+                from .multimodal_processor import multimodal_processor
+                processed_prompt = await multimodal_processor.process_pdfs(
+                    pdfs=pdfs,
+                    user_prompt=prompt
                 )
-            else:
-                # No vision nodes - use Gemini as fallback for PDFs only
-                logger.warning(
-                    "no_vision_nodes_using_gemini_fallback",
+                logger.info(
+                    "pdfs_processed_via_gemini",
                     task_id=task_id,
                     pdf_count=len(pdfs),
-                    image_count=len(images)
+                    original_prompt_length=len(prompt),
+                    processed_prompt_length=len(processed_prompt)
                 )
 
-                if pdfs:
-                    from .multimodal_processor import multimodal_processor
-                    processed_prompt = await multimodal_processor.process_pdfs(
-                        pdfs=pdfs,
-                        user_prompt=prompt
-                    )
+            # Images: Send to vision-capable nodes if available
+            if images:
+                if vision_nodes:
+                    vision_files = images  # Only images, not PDFs
                     logger.info(
-                        "pdf_processed_via_gemini_fallback",
+                        "images_will_be_sent_to_vision_nodes",
                         task_id=task_id,
-                        original_prompt_length=len(prompt),
-                        processed_prompt_length=len(processed_prompt)
+                        image_count=len(images),
+                        image_names=[f.filename for f in images]
                     )
-
-                if images:
-                    # Cannot process images without vision nodes
+                else:
+                    # No vision nodes - cannot process images
                     image_names = ", ".join(f.filename for f in images)
                     processed_prompt = f"""NOTA: El usuario adjuntó imágenes ({image_names}) pero no hay nodos con capacidad de visión disponibles. No es posible procesar las imágenes en este momento.
 

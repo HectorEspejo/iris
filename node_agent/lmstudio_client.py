@@ -447,17 +447,16 @@ class LMStudioClient:
                 "content": system_prompt
             })
 
-        # Build multimodal content - handle both images and PDFs
+        # Build multimodal content - only images (LM Studio doesn't support PDFs via API)
         content = [{"type": "text", "text": prompt}]
 
         images_count = 0
-        pdfs_count = 0
 
         for file in files:
             mime_type = file['mime_type'].lower()
 
             if mime_type.startswith('image/'):
-                # Handle images
+                # Handle images only
                 # LM Studio may have issues with webp
                 if mime_type == 'image/webp':
                     mime_type = 'image/png'
@@ -469,17 +468,13 @@ class LMStudioClient:
                     }
                 })
                 images_count += 1
-
-            elif mime_type == 'application/pdf':
-                # Handle PDFs - use file type for LM Studio
-                content.append({
-                    "type": "file",
-                    "file": {
-                        "filename": file.get('filename', 'document.pdf'),
-                        "file_data": f"data:application/pdf;base64,{file['content_base64']}"
-                    }
-                })
-                pdfs_count += 1
+            else:
+                # Skip non-image files (PDFs should be processed by Gemini on coordinator)
+                logger.warning(
+                    "skipping_non_image_file",
+                    filename=file.get('filename', 'unknown'),
+                    mime_type=mime_type
+                )
 
         messages.append({
             "role": "user",
@@ -490,7 +485,6 @@ class LMStudioClient:
             "vision_completion_request",
             file_count=len(files),
             images_count=images_count,
-            pdfs_count=pdfs_count,
             prompt_length=len(prompt),
             mime_types=[f['mime_type'] for f in files]
         )
