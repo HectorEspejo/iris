@@ -32,6 +32,143 @@ logger = structlog.get_logger()
 # Constants
 HEARTBEAT_TIMEOUT = timedelta(seconds=90)  # Node considered offline after this
 
+# Selection algorithm weights (SED + P2C hybrid)
+SELECTION_WEIGHTS = {
+    "expected_delay": 0.40,  # SED: load / tokens_per_second
+    "reputation": 0.30,      # Historical reliability
+    "tier_match": 0.20,      # Difficulty-capability match
+    "random": 0.10,          # Exploration factor
+}
+
+# Circuit breaker constants
+CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3
+CIRCUIT_BREAKER_RECOVERY_TIMEOUT = timedelta(minutes=5)
+
+
+# =============================================================================
+# Circuit Breaker
+# =============================================================================
+
+@dataclass
+class NodeCircuitBreaker:
+    """
+    Circuit breaker state for a single node.
+
+    States:
+    - closed: Normal operation, node accepts tasks
+    - open: Node excluded from selection due to consecutive failures
+    - half_open: Recovery period, allows one test request
+    """
+    failure_count: int = 0
+    success_count: int = 0
+    last_failure: Optional[datetime] = None
+    last_success: Optional[datetime] = None
+    state: str = "closed"  # closed, open, half_open
+
+    def record_failure(self) -> None:
+        """Record a task failure for this node."""
+        self.failure_count += 1
+        self.last_failure = datetime.utcnow()
+        self.success_count = 0  # Reset success streak
+
+        if self.failure_count >= CIRCUIT_BREAKER_FAILURE_THRESHOLD:
+            self.state = "open"
+            logger.warning(
+                "circuit_breaker_opened",
+                failure_count=self.failure_count
+            )
+
+    def record_success(self) -> None:
+        """Record a task success for this node."""
+        self.success_count += 1
+        self.last_success = datetime.utcnow()
+
+        # Reset to closed after success in half_open state
+        if self.state == "half_open":
+            self.state = "closed"
+            self.failure_count = 0
+            logger.info("circuit_breaker_closed_after_recovery")
+        # Gradual recovery: reduce failure count on sustained success
+        elif self.success_count >= 3 and self.failure_count > 0:
+            self.failure_count = max(0, self.failure_count - 1)
+            self.success_count = 0
+
+    def is_available(self) -> bool:
+        """Check if this node is available for task assignment."""
+        if self.state == "closed":
+            return True
+
+        if self.state == "open":
+            # Check if recovery timeout has passed
+            if self.last_failure and \
+               datetime.utcnow() - self.last_failure > CIRCUIT_BREAKER_RECOVERY_TIMEOUT:
+                self.state = "half_open"
+                logger.info("circuit_breaker_half_open")
+                return True
+            return False
+
+        # half_open: allow one test request
+        return True
+
+
+class CircuitBreakerManager:
+    """
+    Manages circuit breakers for all nodes.
+
+    Excludes nodes that have failed consecutively to prevent
+    assigning tasks to unreliable nodes.
+    """
+
+    def __init__(self):
+        self._breakers: dict[str, NodeCircuitBreaker] = {}
+        self._lock = asyncio.Lock()
+
+    def _get_or_create(self, node_id: str) -> NodeCircuitBreaker:
+        """Get or create a circuit breaker for a node."""
+        if node_id not in self._breakers:
+            self._breakers[node_id] = NodeCircuitBreaker()
+        return self._breakers[node_id]
+
+    async def record_failure(self, node_id: str) -> None:
+        """Record a task failure for a node."""
+        async with self._lock:
+            breaker = self._get_or_create(node_id)
+            breaker.record_failure()
+            logger.debug(
+                "node_failure_recorded",
+                node_id=node_id,
+                failure_count=breaker.failure_count,
+                state=breaker.state
+            )
+
+    async def record_success(self, node_id: str) -> None:
+        """Record a task success for a node."""
+        async with self._lock:
+            breaker = self._get_or_create(node_id)
+            breaker.record_success()
+
+    def is_available(self, node_id: str) -> bool:
+        """Check if a node is available (not circuit-broken)."""
+        breaker = self._breakers.get(node_id)
+        if not breaker:
+            return True
+        return breaker.is_available()
+
+    def get_stats(self) -> dict:
+        """Get circuit breaker statistics."""
+        return {
+            node_id: {
+                "state": cb.state,
+                "failure_count": cb.failure_count,
+                "success_count": cb.success_count
+            }
+            for node_id, cb in self._breakers.items()
+        }
+
+
+# Global circuit breaker manager
+circuit_breaker = CircuitBreakerManager()
+
 # Tier-Difficulty matching matrix
 # Maps (NodeTier, TaskDifficulty) -> score multiplier for matching
 TIER_DIFFICULTY_SCORE = {
@@ -423,6 +560,8 @@ class NodeRegistry:
         """
         Handle NODE_HEARTBEAT message.
 
+        Calculates round-trip latency based on the timestamp sent by the node.
+
         Args:
             node_id: The node's ID
             message: The heartbeat message
@@ -431,6 +570,7 @@ class NodeRegistry:
             True if handled successfully
         """
         try:
+            received_at = datetime.utcnow()
             payload = parse_payload(message, NodeHeartbeatPayload)
 
             node = self._nodes.get(node_id)
@@ -439,8 +579,27 @@ class NodeRegistry:
                 return False
 
             # Update state
-            node.last_heartbeat = datetime.utcnow()
+            node.last_heartbeat = received_at
             node.current_load = payload.current_load
+
+            # Calculate latency from node's sent_at timestamp
+            # Note: This assumes clocks are reasonably synchronized
+            # In practice, RTT/2 would be more accurate but requires a response timestamp
+            if payload.sent_at:
+                latency_ms = (received_at - payload.sent_at).total_seconds() * 1000
+                # Apply exponential moving average to smooth out spikes
+                if node.latency_ms is not None:
+                    # EMA with alpha=0.3 for responsiveness
+                    node.latency_ms = 0.3 * latency_ms + 0.7 * node.latency_ms
+                else:
+                    node.latency_ms = latency_ms
+
+                # Clamp to reasonable bounds (0-5000ms)
+                node.latency_ms = max(0, min(5000, node.latency_ms))
+
+            # Update tokens_per_second if provided (real-time performance update)
+            if payload.tokens_per_second is not None and payload.tokens_per_second > 0:
+                node.tokens_per_second = payload.tokens_per_second
 
             # Update database
             await db.update_node_last_seen(node_id)
@@ -455,7 +614,8 @@ class NodeRegistry:
             logger.debug(
                 "node_heartbeat",
                 node_id=node_id,
-                load=payload.current_load
+                load=payload.current_load,
+                latency_ms=round(node.latency_ms, 2) if node.latency_ms else None
             )
             return True
 
@@ -635,6 +795,146 @@ class NodeRegistry:
             requested=n,
             selected_count=len(selected),
             selected_tiers=[node.node_tier.value for node in selected]
+        )
+
+        return selected
+
+    async def select_nodes_v3(
+        self,
+        difficulty: TaskDifficulty,
+        n: int = 1,
+        exclude: Optional[set[str]] = None
+    ) -> list[ConnectedNode]:
+        """
+        Select nodes using hybrid SED + Power of Two Choices algorithm.
+
+        Algorithm:
+        1. Filter available nodes (online, not excluded, not circuit-broken)
+        2. For each selection:
+           a. Pick 2 random candidates (Power of Two Choices)
+           b. Score each using weighted formula
+           c. Select the best candidate
+        3. Repeat until n nodes selected or no more candidates
+
+        Scoring formula (SED-based):
+        - Expected Delay (0.40): load / tokens_per_second (lower is better)
+        - Reputation (0.30): normalized reputation score
+        - Tier Match (0.20): how well node tier matches difficulty
+        - Random (0.10): exploration factor
+
+        Args:
+            difficulty: Task difficulty level
+            n: Number of nodes to select
+            exclude: Node IDs to exclude from selection
+
+        Returns:
+            List of selected nodes, best matches first
+        """
+        exclude = exclude or set()
+        available = [
+            node for node in self._nodes.values()
+            if node.node_id not in exclude
+            and self.is_online(node.node_id)
+            and circuit_breaker.is_available(node.node_id)
+        ]
+
+        if not available:
+            logger.warning(
+                "no_available_nodes_v3",
+                difficulty=difficulty.value,
+                requested=n,
+                excluded_count=len(exclude)
+            )
+            return []
+
+        # Get reputation scores from database
+        node_reputations = {}
+        for node in available:
+            db_node = await db.get_node_by_id(node.node_id)
+            if db_node:
+                node_reputations[node.node_id] = db_node.get("reputation", 100)
+            else:
+                node_reputations[node.node_id] = 100
+
+        # Calculate normalization factors
+        max_rep = max(node_reputations.values()) or 1
+        # For SED, we need to avoid division by zero in tokens_per_second
+        min_tps = 1.0  # Minimum tokens per second to prevent infinite delay
+
+        def calculate_score(node: ConnectedNode) -> float:
+            """Calculate selection score for a node."""
+            # Expected Delay (SED): load / tokens_per_second
+            # Lower delay = better, so we invert: 1 / (1 + delay)
+            tps = max(node.tokens_per_second, min_tps)
+            expected_delay = node.current_load / tps
+            # Normalize delay: assume max reasonable delay is 10 tasks / 1 tps = 10
+            delay_score = 1 / (1 + expected_delay)
+
+            # Reputation score (higher is better)
+            rep_score = node_reputations.get(node.node_id, 100) / max_rep
+
+            # Tier match score
+            tier_score = TIER_DIFFICULTY_SCORE.get(
+                (node.node_tier, difficulty),
+                0.5
+            )
+
+            # Random factor for exploration
+            random_factor = random.uniform(0, 1)
+
+            # Weighted combination
+            total_score = (
+                SELECTION_WEIGHTS["expected_delay"] * delay_score +
+                SELECTION_WEIGHTS["reputation"] * rep_score +
+                SELECTION_WEIGHTS["tier_match"] * tier_score +
+                SELECTION_WEIGHTS["random"] * random_factor
+            )
+
+            return total_score
+
+        # Power of Two Choices selection
+        selected = []
+        candidates = available.copy()
+
+        for _ in range(min(n, len(available))):
+            if not candidates:
+                break
+
+            if len(candidates) == 1:
+                # Only one candidate left
+                selected.append(candidates.pop())
+                continue
+
+            # Pick 2 random candidates
+            if len(candidates) >= 2:
+                pair = random.sample(candidates, 2)
+            else:
+                pair = candidates.copy()
+
+            # Score and select the best
+            scores = [(node, calculate_score(node)) for node in pair]
+            best_node = max(scores, key=lambda x: x[1])[0]
+
+            selected.append(best_node)
+            candidates.remove(best_node)
+
+        # Log selection details
+        logger.info(
+            "nodes_selected_v3",
+            difficulty=difficulty.value,
+            requested=n,
+            available=len(available),
+            selected_count=len(selected),
+            selected_nodes=[
+                {
+                    "id": node.node_id,
+                    "tier": node.node_tier.value,
+                    "load": node.current_load,
+                    "tps": round(node.tokens_per_second, 1),
+                    "latency_ms": round(node.latency_ms, 1) if node.latency_ms else None
+                }
+                for node in selected
+            ]
         )
 
         return selected

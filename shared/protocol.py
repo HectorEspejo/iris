@@ -70,6 +70,8 @@ class NodeHeartbeatPayload(BaseModel):
     node_id: str
     current_load: int = 0  # Number of tasks currently processing
     uptime_seconds: int = 0
+    # Timestamp for RTT/latency measurement
+    sent_at: datetime = Field(default_factory=datetime.utcnow)
     # Extended stats for real-time updates
     gpu_vram_free: Optional[float] = None  # Current free VRAM
     tokens_per_second: Optional[float] = None  # Recent performance

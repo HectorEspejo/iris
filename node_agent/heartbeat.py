@@ -129,13 +129,14 @@ class HeartbeatManager:
         if self._get_load_callback:
             current_load = self._get_load_callback()
 
-        # Create heartbeat message
+        # Create heartbeat message with timestamp for latency measurement
         message = ProtocolMessage.create(
             MessageType.NODE_HEARTBEAT,
             NodeHeartbeatPayload(
                 node_id=self.node_id,
                 current_load=current_load,
-                uptime_seconds=self.uptime_seconds
+                uptime_seconds=self.uptime_seconds,
+                sent_at=datetime.utcnow()
             )
         )
 

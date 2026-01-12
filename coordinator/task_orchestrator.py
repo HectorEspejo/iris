@@ -7,7 +7,7 @@ Handles task division, node assignment, and task lifecycle management.
 import asyncio
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 import structlog
 
 from shared.models import (
@@ -30,7 +30,7 @@ from shared.protocol import (
 )
 from .database import db
 from .crypto import coordinator_crypto
-from .node_registry import node_registry
+from .node_registry import node_registry, circuit_breaker
 from .difficulty_classifier import classify_task_difficulty, classify_task_difficulty_async
 from .streaming import streaming_manager
 
@@ -38,6 +38,7 @@ logger = structlog.get_logger()
 
 # Constants
 MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # Base delay for exponential backoff (seconds)
 
 # Timeout por dificultad de tarea (en segundos)
 # Para tareas complejas y avanzadas, usamos timeouts mucho más largos
@@ -175,13 +176,24 @@ class TaskOrchestrator:
                 streaming=enable_streaming
             )
 
-            # Assign subtasks to nodes using intelligent matching
-            await self._assign_subtasks(subtasks, adjusted_difficulty, enable_streaming)
+            # Assign subtasks to nodes using intelligent matching with retries
+            assignments = await self._assign_subtasks(
+                subtasks,
+                adjusted_difficulty,
+                enable_streaming
+            )
 
-            # Wait for all subtasks to complete with difficulty-based timeout
-            # Add extra buffer time for coordination overhead
-            wait_timeout = get_timeout_for_difficulty(adjusted_difficulty) + 30
-            await self._wait_for_completion(task_id, subtasks, timeout=wait_timeout)
+            # Wait for all subtasks to complete with individual timeouts
+            # Each subtask gets its own timeout, and can be reassigned on failure
+            wait_timeout = get_timeout_for_difficulty(adjusted_difficulty)
+            await self._wait_for_completion(
+                task_id=task_id,
+                subtasks=subtasks,
+                difficulty=adjusted_difficulty,
+                assignments=assignments,
+                timeout=wait_timeout,
+                enable_streaming=enable_streaming
+            )
 
             # Aggregate results
             from .response_aggregator import response_aggregator
@@ -347,37 +359,54 @@ class TaskOrchestrator:
 
         return chunks
 
-    async def _assign_subtasks(
+    async def _assign_subtask_with_retry(
         self,
-        subtasks: list[dict],
+        subtask: dict,
         difficulty: TaskDifficulty,
-        enable_streaming: bool = False
-    ) -> None:
+        enable_streaming: bool = False,
+        excluded_nodes: Optional[set[str]] = None
+    ) -> tuple[bool, Optional[str]]:
         """
-        Assign subtasks to available nodes using intelligent matching.
-
-        Uses select_nodes_v2 to match task difficulty with node capabilities.
+        Assign a single subtask with retry logic and exponential backoff.
 
         Args:
-            subtasks: List of subtask records
+            subtask: Subtask record to assign
             difficulty: Task difficulty level
             enable_streaming: If True, nodes will stream chunks back
+            excluded_nodes: Node IDs to exclude from selection
+
+        Returns:
+            Tuple of (success, assigned_node_id)
         """
-        for subtask in subtasks:
-            # Select a node using intelligent tier-based matching
-            nodes = await node_registry.select_nodes_v2(
+        excluded = excluded_nodes.copy() if excluded_nodes else set()
+
+        for attempt in range(MAX_RETRIES):
+            # Select a node using SED + P2C algorithm
+            nodes = await node_registry.select_nodes_v3(
                 difficulty=difficulty,
-                n=1
+                n=1,
+                exclude=excluded
             )
 
             if not nodes:
-                logger.warning(
-                    "no_nodes_available",
-                    subtask_id=subtask["id"],
-                    difficulty=difficulty.value
-                )
-                await db.fail_subtask(subtask["id"], SubtaskStatus.FAILED.value)
-                continue
+                if attempt < MAX_RETRIES - 1:
+                    # Wait with exponential backoff before retry
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "no_nodes_available_retrying",
+                        subtask_id=subtask["id"],
+                        attempt=attempt + 1,
+                        delay=delay
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(
+                        "no_nodes_available_exhausted",
+                        subtask_id=subtask["id"],
+                        attempts=MAX_RETRIES
+                    )
+                    return False, None
 
             node = nodes[0]
 
@@ -420,39 +449,239 @@ class TaskOrchestrator:
                     node_tier=node.node_tier.value,
                     difficulty=difficulty.value,
                     timeout_seconds=timeout_seconds,
-                    streaming=enable_streaming
+                    streaming=enable_streaming,
+                    attempt=attempt + 1
                 )
+                return True, node.node_id
+            else:
+                # Record failure in circuit breaker
+                await circuit_breaker.record_failure(node.node_id)
+                excluded.add(node.node_id)
+
+                if attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        "subtask_send_failed_retrying",
+                        subtask_id=subtask["id"],
+                        node_id=node.node_id,
+                        attempt=attempt + 1,
+                        delay=delay
+                    )
+                    await asyncio.sleep(delay)
+
+        return False, None
+
+    async def _assign_subtasks(
+        self,
+        subtasks: list[dict],
+        difficulty: TaskDifficulty,
+        enable_streaming: bool = False
+    ) -> dict[str, str]:
+        """
+        Assign subtasks to available nodes using intelligent matching with retries.
+
+        Uses select_nodes_v3 (SED + P2C) for optimal node selection.
+
+        Args:
+            subtasks: List of subtask records
+            difficulty: Task difficulty level
+            enable_streaming: If True, nodes will stream chunks back
+
+        Returns:
+            Dict mapping subtask_id -> assigned_node_id for successful assignments
+        """
+        assignments = {}
+
+        for subtask in subtasks:
+            success, node_id = await self._assign_subtask_with_retry(
+                subtask=subtask,
+                difficulty=difficulty,
+                enable_streaming=enable_streaming
+            )
+
+            if success and node_id:
+                assignments[subtask["id"]] = node_id
             else:
                 await db.fail_subtask(subtask["id"], SubtaskStatus.FAILED.value)
+                logger.error(
+                    "subtask_assignment_failed",
+                    subtask_id=subtask["id"],
+                    difficulty=difficulty.value
+                )
+
+        return assignments
+
+    async def _try_reassign_subtask(
+        self,
+        subtask_id: str,
+        difficulty: TaskDifficulty,
+        failed_node_id: Optional[str] = None,
+        enable_streaming: bool = False
+    ) -> bool:
+        """
+        Try to reassign a timed-out or failed subtask to a different node.
+
+        Args:
+            subtask_id: ID of the subtask to reassign
+            difficulty: Task difficulty level
+            failed_node_id: Node that failed (to exclude from selection)
+            enable_streaming: If True, enable streaming for reassignment
+
+        Returns:
+            True if reassignment was successful
+        """
+        # Get subtask from database
+        subtask = await db.get_subtask_by_id(subtask_id)
+        if not subtask:
+            return False
+
+        # Exclude the failed node
+        excluded = {failed_node_id} if failed_node_id else set()
+
+        # Record failure in circuit breaker if we have a failed node
+        if failed_node_id:
+            await circuit_breaker.record_failure(failed_node_id)
+            node_registry.decrement_load(failed_node_id)
+
+        # Try to reassign
+        success, new_node_id = await self._assign_subtask_with_retry(
+            subtask=subtask,
+            difficulty=difficulty,
+            enable_streaming=enable_streaming,
+            excluded_nodes=excluded
+        )
+
+        if success:
+            logger.info(
+                "subtask_reassigned",
+                subtask_id=subtask_id,
+                from_node=failed_node_id,
+                to_node=new_node_id
+            )
+            return True
+
+        return False
+
+    async def _wait_for_single_subtask(
+        self,
+        subtask: dict,
+        difficulty: TaskDifficulty,
+        timeout: int,
+        assignments: Dict[str, str],
+        enable_streaming: bool = False
+    ) -> str:
+        """
+        Wait for a single subtask with timeout and optional reassignment.
+
+        Args:
+            subtask: Subtask record
+            difficulty: Task difficulty
+            timeout: Timeout in seconds
+            assignments: Dict of subtask_id -> node_id
+            enable_streaming: If True, enable streaming
+
+        Returns:
+            Status string: "completed", "reassigned", "timeout", "failed"
+        """
+        subtask_id = subtask["id"]
+
+        if subtask_id not in self._pending_subtasks:
+            return "failed"
+
+        try:
+            await asyncio.wait_for(
+                self._pending_subtasks[subtask_id].wait(),
+                timeout=timeout
+            )
+            return "completed"
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "subtask_timeout",
+                subtask_id=subtask_id,
+                timeout=timeout
+            )
+
+            # Try to reassign to a different node
+            failed_node = assignments.get(subtask_id)
+            if await self._try_reassign_subtask(
+                subtask_id=subtask_id,
+                difficulty=difficulty,
+                failed_node_id=failed_node,
+                enable_streaming=enable_streaming
+            ):
+                # Wait again for the reassigned subtask (with reduced timeout)
+                reassign_timeout = max(30, timeout // 2)
+                try:
+                    await asyncio.wait_for(
+                        self._pending_subtasks[subtask_id].wait(),
+                        timeout=reassign_timeout
+                    )
+                    return "reassigned"
+                except asyncio.TimeoutError:
+                    pass
+
+            # Mark as timeout if all attempts failed
+            await db.fail_subtask(subtask_id, SubtaskStatus.TIMEOUT.value)
+            return "timeout"
 
     async def _wait_for_completion(
         self,
         task_id: str,
         subtasks: list[dict],
-        timeout: int = 120
+        difficulty: TaskDifficulty,
+        assignments: Dict[str, str],
+        timeout: int = 120,
+        enable_streaming: bool = False
     ) -> None:
-        """Wait for all subtasks to complete."""
+        """
+        Wait for all subtasks to complete with individual timeouts and reassignment.
+
+        Each subtask gets its own timeout. If a subtask times out, we attempt
+        to reassign it to a different node before marking it as failed.
+
+        Args:
+            task_id: Parent task ID
+            subtasks: List of subtask records
+            difficulty: Task difficulty level
+            assignments: Dict mapping subtask_id -> assigned_node_id
+            timeout: Base timeout per subtask in seconds
+            enable_streaming: If True, enable streaming for reassignments
+        """
         # Create events for each subtask
         for subtask in subtasks:
             self._pending_subtasks[subtask["id"]] = asyncio.Event()
 
         try:
-            # Wait with timeout
-            await asyncio.wait_for(
-                asyncio.gather(*[
-                    self._pending_subtasks[s["id"]].wait()
-                    for s in subtasks
-                    if s["id"] in self._pending_subtasks
-                ]),
-                timeout=timeout
+            # Wait for all subtasks with individual timeouts
+            results = await asyncio.gather(*[
+                self._wait_for_single_subtask(
+                    subtask=subtask,
+                    difficulty=difficulty,
+                    timeout=timeout,
+                    assignments=assignments,
+                    enable_streaming=enable_streaming
+                )
+                for subtask in subtasks
+                if subtask["id"] in self._pending_subtasks
+            ], return_exceptions=True)
+
+            # Log summary
+            completed = sum(1 for r in results if r == "completed")
+            reassigned = sum(1 for r in results if r == "reassigned")
+            timeouts = sum(1 for r in results if r == "timeout")
+            errors = sum(1 for r in results if isinstance(r, Exception))
+
+            logger.info(
+                "task_completion_summary",
+                task_id=task_id,
+                total=len(subtasks),
+                completed=completed,
+                reassigned=reassigned,
+                timeouts=timeouts,
+                errors=errors
             )
-        except asyncio.TimeoutError:
-            logger.warning("task_timeout", task_id=task_id)
-            # Mark remaining as timeout
-            for subtask in subtasks:
-                current = await db.get_subtask_by_id(subtask["id"])
-                if current and current["status"] in ("pending", "assigned"):
-                    await db.fail_subtask(subtask["id"], SubtaskStatus.TIMEOUT.value)
+
         finally:
             # Clean up events
             for subtask in subtasks:
@@ -496,6 +725,9 @@ class TaskOrchestrator:
 
             # Update node load
             node_registry.decrement_load(node_id)
+
+            # Record success in circuit breaker
+            await circuit_breaker.record_success(node_id)
 
             # Update reputation (async)
             from .reputation import reputation_system
@@ -543,6 +775,9 @@ class TaskOrchestrator:
 
         # Update node load
         node_registry.decrement_load(node_id)
+
+        # Record failure in circuit breaker
+        await circuit_breaker.record_failure(node_id)
 
         # Notify streaming manager of error
         await streaming_manager.complete_stream(
